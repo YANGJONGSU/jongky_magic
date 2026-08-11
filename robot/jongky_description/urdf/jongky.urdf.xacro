@@ -14,7 +14,7 @@
        [TBD]        센서 좌표 / 질량은 아직 추정값
        ================================================================ -->
 
-  <xacro:macro name="insert_robot" params="namespace is_sim:=false cam_tilt_deg laser_yaw_deg tof_pitch_deg tof_yaw_deg">
+  <xacro:macro name="insert_robot" params="namespace is_sim:=false use_mock:=false cam_tilt_deg laser_yaw_deg tof_pitch_deg tof_yaw_deg">
 
     <xacro:include filename="$(find jongky_description)/urdf/common/insert_inertia.urdf.xacro"/>
 
@@ -305,6 +305,58 @@
       <child  link="imu_link"/>
       <origin xyz="${imu_x} 0 ${imu_z}" rpy="0 0 0"/>
     </joint>
+
+
+    <!-- ============================================================
+         ros2_control : diff_drive_controller 가 붙는 지점
+
+         하드웨어는 세 갈래다.
+           use_mock:=true   목업. 명령을 그대로 상태로 되돌린다.
+                            하드웨어 없이 /cmd_vel -> /odom -> TF 전 경로 검증용
+           is_sim:=true     시뮬레이터 (gz_ros2_control). 아직 미배선
+           둘 다 false      실물. jongky_hardware 플러그인
+
+         [부호 주의] 이 인터페이스의 관절 속도는 ROS 규약이다 —
+         양수 = 전진. 야붐 보드는 반대이므로 부호 반전은 전부
+         jongky_hardware 안에서 처리한다. 여기서는 신경 쓰지 않는다.
+         근거는 야붐보드-레퍼런스.md "부호 규약" 절.
+         ============================================================ -->
+    <ros2_control name="jongky" type="system">
+      <hardware>
+        <xacro:if value="${use_mock}">
+          <plugin>mock_components/GenericSystem</plugin>
+          <!-- 속도 명령을 적분해 위치 상태를 만들어 준다.
+               diff_drive_controller 가 position_feedback:=true 라 필요하다 -->
+          <param name="calculate_dynamics">true</param>
+        </xacro:if>
+        <xacro:unless value="${use_mock}">
+          <plugin>jongky_hardware/JongkySystemHardware</plugin>
+          <param name="serial_port">/dev/yahboom</param>
+          <param name="baud_rate">115200</param>
+          <param name="car_type">1</param>
+          <!-- [미확정] 줄자 실측으로 확정할 것 -->
+          <param name="counts_per_rev">3182</param>
+        </xacro:unless>
+      </hardware>
+
+      <joint name="l_wheel_joint">
+        <command_interface name="velocity">
+          <param name="min">-20.0</param>
+          <param name="max">20.0</param>
+        </command_interface>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+      </joint>
+
+      <joint name="r_wheel_joint">
+        <command_interface name="velocity">
+          <param name="min">-20.0</param>
+          <param name="max">20.0</param>
+        </command_interface>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+      </joint>
+    </ros2_control>
 
   </xacro:macro>
 </robot>

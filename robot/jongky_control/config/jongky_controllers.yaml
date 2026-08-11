@@ -1,0 +1,80 @@
+# 종키 AMR 컨트롤러 설정
+#
+# 값의 근거는 robot/jongky_description/HANDOVER.md 와
+# 야붐 보드 레퍼런스 문서를 참조. 실차 캘리브레이션으로 확정해야 하는
+# 값에는 [미확정] 표시를 달았다.
+
+controller_manager:
+  ros__parameters:
+    # 보드가 엔코더를 약 25 Hz 로 보고한다. 컨트롤러를 50 Hz 로 돌리면
+    # 절반의 주기는 갱신되지 않은 값을 보게 되는데, 위치 적분으로
+    # 만드는 odom 포즈는 정확하고 속도만 튄다.
+    # 그 튐은 아래 velocity_rolling_window_size 로 평활한다.
+    update_rate: 50
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    diff_drive_controller:
+      type: diff_drive_controller/DiffDriveController
+
+
+diff_drive_controller:
+  ros__parameters:
+    left_wheel_names:  ["l_wheel_joint"]
+    right_wheel_names: ["r_wheel_joint"]
+
+    # jongky_description 의 값과 반드시 일치시킬 것.
+    # [미확정] wheel_separation 은 줄자 실측 기반 잠정값이다.
+    #          제자리 10바퀴 회전 후 /odom yaw 와 실제 3600도를 비교해
+    #          `새 값 = 현재값 x (오도메트리 각 / 3600)` 으로 보정한다.
+    wheel_separation: 0.11625
+    wheel_radius:     0.0335
+
+    # 보정 계수. 위 값을 직접 고치는 대신 이쪽을 쓰면
+    # description 과의 일치를 깨지 않고 실차 오차만 흡수할 수 있다.
+    wheel_separation_multiplier:   1.0
+    left_wheel_radius_multiplier:  1.0
+    right_wheel_radius_multiplier: 1.0
+
+    # base_frame_id 기본값은 base_link 다. 종키는 base_footprint 가
+    # 바닥 기준 루트이므로 반드시 바꿔야 한다. 안 바꾸면 odom 이
+    # 바퀴축 높이(33.5mm)를 기준으로 잡혀 지도가 그만큼 뜬다.
+    base_frame_id: base_footprint
+    odom_frame_id: odom
+    enable_odom_tf: true
+
+    # 엔코더가 있으므로 위치 피드백을 쓴다. open_loop 로 두면
+    # 명령값을 그대로 오도메트리로 적분해 실제 주행과 어긋난다.
+    position_feedback: true
+    open_loop: false
+
+    publish_rate: 50.0
+    cmd_vel_timeout: 0.5
+    velocity_rolling_window_size: 10
+
+    # 대각 성분만 채운다. x·y·yaw 는 신뢰하고 z·roll·pitch 는
+    # 2D 로봇이라 의미가 없으므로 큰 값으로 눌러 둔다.
+    pose_covariance_diagonal:  [0.001, 0.001, 1000000.0, 1000000.0, 1000000.0, 0.03]
+    twist_covariance_diagonal: [0.001, 1000000.0, 1000000.0, 1000000.0, 1000000.0, 0.03]
+
+    # ── 속도·가속도 제한 ─────────────────────────────────────────
+    # 보드가 목표 속도까지 자체 램프를 태운다. vx=0.15 를 명령해도
+    # 1.5초 시점에 0.088 m/s 밖에 못 올라갔다. 컨트롤러가 그보다 급한
+    # 변화를 명령해도 하드웨어가 못 따라오므로 가속 제한을 낮게 잡는다.
+    # [미확정] 실주행에서 다시 조일 것.
+    linear.x.has_velocity_limits:     true
+    linear.x.max_velocity:            0.40
+    linear.x.min_velocity:           -0.30    # 후진은 더 느리게
+    linear.x.has_acceleration_limits: true
+    linear.x.max_acceleration:        0.30
+    linear.x.max_deceleration:       -0.60    # 감속은 음수 규약
+    linear.x.has_jerk_limits:         false
+
+    angular.z.has_velocity_limits:     true
+    angular.z.max_velocity:            1.50
+    angular.z.min_velocity:           -1.50
+    angular.z.has_acceleration_limits: true
+    angular.z.max_acceleration:        1.50
+    angular.z.max_deceleration:       -2.50
+    angular.z.has_jerk_limits:         false
