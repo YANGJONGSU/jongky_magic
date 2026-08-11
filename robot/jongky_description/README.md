@@ -49,16 +49,16 @@ ros2 run jongky_description check_depth_min_range.py
 
 ## docs/conventions.md 와 다른 점
 
-메쉬를 실제로 받아본 뒤 규약과 어긋난 부분이 생겼습니다. **어느 쪽을 맞출지 팀 논의가 필요합니다.**
+메쉬를 실제로 받아본 뒤 규약과 어긋난 부분이 생겼습니다. 원점 항목은 규약 문서를 고쳐 해소했고,
+나머지 셋은 다음 메쉬 리비전에 적용할 목표로 남겨둡니다.
 
 | 항목 | conventions.md | 현재 구현 |
 |---|---|---|
-| `base_link` 원점 | 구동륜 축 중심을 **바닥에 투영**한 점 | 구동륜 **축 높이**(바닥+33.5mm). 바닥 투영점은 `base_footprint` |
 | visual 포맷 | `.dae` (재질 포함) | `.stl` (수령본이 STL) |
 | collision 메쉬 | `meshes/collision/*.stl` | 메쉬 없이 primitive (박스 1 + 구 4) |
 | 링크 단위 분할 | 링크마다 파일 분리 | `base_link.stl` 하나에 판·젯슨·배터리·모터·캐스터 전부 |
 
-- **원점**: 지금 구조(`base_footprint`가 바닥, `base_link`가 축 높이)가 ROS 관례이고 Nav2·SLAM이 기대하는 형태입니다. conventions.md 쪽을 고치는 게 맞다고 봅니다.
+- **원점**: conventions.md 쪽을 고쳤습니다 (2026-08). `base_footprint`가 바닥, `base_link`가 축 높이인 지금 구조가 ROS 관례이고 Nav2·SLAM이 기대하는 형태입니다.
 - **collision**: conventions.md 스스로 "22cm급이면 원기둥이나 convex hull로 충분"이라고 했으니 primitive는 규약 취지에 맞습니다.
 - **링크 분할**: 현재는 움직이는 부품이 바퀴뿐이라 실질 문제가 없습니다. 다만 서스펜션이나 팬틸트가 생기면 그때 재분할이 필요합니다.
 

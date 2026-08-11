@@ -15,14 +15,42 @@
   - **한 프로젝트 안에서 방법 A/B 중 하나로 통일**, 파일마다 다르게 섞지 않기
 - 어떤 방법을 썼는지 파일명 또는 전달 시 명시 (예: `base_link.dae` 단위: m)
 
-## 2. 원점 (Origin) — `base_link`
+## 2. 원점 (Origin) — `base_footprint` 와 `base_link`
 
-- `base_link` 원점 = **좌우 구동륜 축 중심을 바닥(지면)에 투영한 점**
-  - 두 구동륜 축 중심을 잇는 선분의 중점을 구하고
-  - 그 점을 z=0(바닥면)으로 수직 투영한 위치
-- 모든 부품 메쉬는 이 `base_link` 원점을 기준으로 한 상대 위치로 정렬되어 있어야 함
-  - CAD assembly 원점 = `base_link` 원점과 일치시켜서 export
-  - 원점이 다르면 URDF `<origin>` 보정값을 부품마다 따로 구해야 해서 오차 누적됨
+원점은 **두 개**다. 헷갈리기 쉬우니 역할을 나눠서 본다.
+
+| 프레임 | 위치 | 쓰는 곳 |
+|---|---|---|
+| `base_footprint` | 좌우 구동륜 축 중심을 **바닥에 투영**한 점 | 내비게이션·SLAM의 기준 바닥 좌표 |
+| **`base_link`** | 좌우 구동륜 **축 중심**(바닥에서 바퀴 반지름만큼 위) | 로봇 본체. **모든 부품이 여기 정렬** |
+
+두 프레임은 `base_footprint → base_link` fixed joint로 z축으로만
+`wheel_radius` 만큼 떨어져 있다. 종키 기준 33.5mm.
+
+### CAD 담당자용 — 어디에 맞춰서 export 하나
+
+**`base_link`, 즉 구동륜 축 중심에 맞춘다. 바닥으로 내리지 않는다.**
+
+- 두 구동륜 축 중심을 잇는 선분의 중점을 CAD assembly 원점으로 잡는다
+- 그 점의 **높이 그대로** 원점으로 쓴다 (z=0으로 투영하지 않는다)
+- 결과적으로 모델 아래쪽이 음수 z로 내려간다. 바퀴 아랫면이 대략
+  `−wheel_radius`, 캐스터가 조금 더 내려갈 수 있다. **이게 정상이다**
+- 모든 부품 메쉬는 이 원점 기준 상대 위치로 정렬되어야 한다.
+  원점이 다르면 URDF `<origin>` 보정값을 부품마다 따로 구해야 해서
+  오차가 누적된다
+
+### 왜 바닥이 아니라 축인가
+
+ROS 관례이고 Nav2·SLAM·`robot_state_publisher`가 이 형태를 기대한다.
+구동륜 joint의 회전축이 `base_link` 원점을 지나야 오도메트리 계산이
+깔끔하고, 바닥 기준이 필요한 쪽은 `base_footprint`를 쓰면 된다.
+`base_link`를 바닥에 두면 바퀴 joint마다 z 오프셋이 붙고 타이어가
+닳아 반지름이 변할 때 전부 다시 잡아야 한다.
+
+> 2026-08 변경: 이 절은 원래 "`base_link` = 바닥 투영점"이었다.
+> 실제 수령 메쉬(`base_link.stl`)가 축 중심 기준으로 왔고 그게
+> ROS 관례와도 맞아서, 문서를 구현에 맞춰 고쳤다.
+> 자세한 배경은 `robot/jongky_description/README.md` 참고.
 
 ## 3. 축 방향 (Axis convention)
 
@@ -87,7 +115,8 @@ robot/jongky_description/meshes/
 ## 메쉬 요청 전 체크리스트
 
 - [ ] 단위: mm → m 변환 방법 확정 (A: CAD단 변환 / B: URDF scale)
-- [ ] 원점: 좌우 구동륜 축 중심의 바닥 투영점 = `base_link` 기준 정렬
+- [ ] 원점: 좌우 구동륜 **축 중심** = `base_link` 기준 정렬
+      (바닥으로 투영하지 말 것. 바닥 투영점은 `base_footprint` 로 URDF가 따로 만든다)
 - [ ] 축 방향: x=전방 / y=좌측 / z=상방 확인 (그림으로 전달)
 - [ ] visual(.dae, 재질 포함) / collision(.stl, 단순화) 분리
 - [ ] 링크 단위로 파일 분리 (base / wheel_left / wheel_right / lidar_mount ...)
