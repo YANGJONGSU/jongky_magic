@@ -14,7 +14,7 @@
        [TBD]        센서 좌표 / 질량은 아직 추정값
        ================================================================ -->
 
-  <xacro:macro name="insert_robot" params="namespace is_sim:=false use_mock:=false cam_tilt_deg laser_yaw_deg tof_pitch_deg tof_yaw_deg">
+  <xacro:macro name="insert_robot" params="namespace is_sim:=false use_mock:=false serial_port cam_tilt_deg laser_yaw_deg tof_pitch_deg tof_yaw_deg">
 
     <xacro:include filename="$(find jongky_description)/urdf/common/insert_inertia.urdf.xacro"/>
 
@@ -331,11 +331,15 @@
         </xacro:if>
         <xacro:unless value="${use_mock}">
           <plugin>jongky_hardware/JongkySystemHardware</plugin>
-          <param name="serial_port">/dev/yahboom</param>
+          <param name="serial_port">${serial_port}</param>
           <param name="baud_rate">115200</param>
           <param name="car_type">1</param>
           <!-- [미확정] 줄자 실측으로 확정할 것 -->
           <param name="counts_per_rev">3182</param>
+          <!-- 위 치수 상수를 그대로 넘긴다. 하드웨어 인터페이스가
+               바퀴속도 -> 차체속도 역산에 쓰므로 URDF 와 어긋나면 안 된다 -->
+          <param name="wheel_radius">${wheel_radius}</param>
+          <param name="wheel_separation">${wheel_y*2}</param>
         </xacro:unless>
       </hardware>
 

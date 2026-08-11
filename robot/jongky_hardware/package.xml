@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>jongky_hardware</name>
+  <version>0.0.1</version>
+  <description>종키 AMR 야붐 제어보드 ros2_control 하드웨어 인터페이스</description>
+  <maintainer email="you@example.com">jongky</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>hardware_interface</depend>
+  <depend>pluginlib</depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_lifecycle</depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+    <hardware_interface plugin="${prefix}/jongky_hardware.xml"/>
+  </export>
+</package>

@@ -14,6 +14,8 @@
   <xacro:arg name="is_sim"        default="false"/>
   <!-- 목업 하드웨어. 실물 없이 /cmd_vel -> /odom -> TF 를 돌려볼 때 true -->
   <xacro:arg name="use_mock"      default="false"/>
+  <!-- 실물 모드에서 쓸 시리얼 포트. 가상 포트로 시험할 때 바꿔 넣는다 -->
+  <xacro:arg name="serial_port"   default="/dev/yahboom"/>
   <xacro:arg name="cam_tilt_deg"  default="0"/>
 
   <!-- 라이다 스캔 0도를 로봇 정면에 맞추는 값. 실물 장착 방향에 달렸다.
@@ -37,6 +39,7 @@
   <xacro:insert_robot namespace="$(arg namespace)"
                       is_sim="$(arg is_sim)"
                       use_mock="$(arg use_mock)"
+                      serial_port="$(arg serial_port)"
                       cam_tilt_deg="$(arg cam_tilt_deg)"
                       laser_yaw_deg="$(arg laser_yaw_deg)"
                       tof_pitch_deg="$(arg tof_pitch_deg)"

@@ -1,0 +1,11 @@
+<library path="jongky_hardware">
+  <class name="jongky_hardware/JongkySystemHardware"
+         type="jongky_hardware::JongkySystemHardware"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      종키 AMR 의 야붐 Rosmaster 제어보드용 ros2_control SystemInterface.
+      좌우 바퀴 각속도를 차체 속도로 바꿔 시리얼로 보내고,
+      엔코더를 관절 위치·속도로 되돌린다. 보드와 ROS 의 부호 차이를 여기서 흡수한다.
+    </description>
+  </class>
+</library>
