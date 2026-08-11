@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://wiki.ros.org/xacro">
+
+  <!-- ============================================================
+       관성 텐서(inertia tensor) 계산 매크로
+
+       물리 엔진은 "이 물체가 회전할 때 얼마나 뻑뻑한가"를 알아야 한다.
+       그 값이 관성 텐서인데, 실제 형상으로 계산하려면 적분이 필요하다.
+       실무에서는 박스/원통/구로 근사해서 공식으로 때운다.
+
+       쓰는 법: <xacro:box_inertia m="0.8" x="0.25" y="0.16" z="0.27"/>
+       m = 질량(kg), 나머지는 미터 단위 치수
+       ============================================================ -->
+
+  <!-- 원통: r=반지름, h=높이. 회전축은 z -->
+  <xacro:macro name="cylinder_inertia" params="m r h">
+    <inertia ixx="${m*(3*r*r+h*h)/12}" ixy="0" ixz="0"
+             iyy="${m*(3*r*r+h*h)/12}" iyz="0"
+             izz="${m*r*r/2}"/>
+  </xacro:macro>
+
+  <!-- 직육면체: x, y, z = 각 변의 길이 -->
+  <xacro:macro name="box_inertia" params="m x y z">
+    <inertia ixx="${m*(y*y+z*z)/12}" ixy="0" ixz="0"
+             iyy="${m*(x*x+z*z)/12}" iyz="0"
+             izz="${m*(x*x+y*y)/12}"/>
+  </xacro:macro>
+
+  <!-- 구: r=반지름 -->
+  <xacro:macro name="sphere_inertia" params="m r">
+    <inertia ixx="${2*m*r*r/5}" ixy="0" ixz="0"
+             iyy="${2*m*r*r/5}" iyz="0"
+             izz="${2*m*r*r/5}"/>
+  </xacro:macro>
+
+</robot>

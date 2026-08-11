@@ -49,12 +49,12 @@
 
 - **visual**: `.dae` (재질 포함)
 - **collision**: `.stl`
-- 저장 위치: `robot/guide_description/meshes/` 아래 고정
+- 저장 위치: `robot/jongky_description/meshes/` 아래 고정
   - `meshes/visual/` — `.dae`
   - `meshes/collision/` — `.stl`
 
 ```
-robot/guide_description/meshes/
+robot/jongky_description/meshes/
 ├── visual/
 │   ├── base_link.dae
 │   ├── wheel_left.dae

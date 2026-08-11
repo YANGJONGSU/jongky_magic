@@ -23,7 +23,7 @@ jongky는 특정 장소의 가이드를 수행하는 VLM 기반 자율주행 로
 ## 저장소 구조
 
 ```
-guide-robot/
+jongky_magic/
 ├── docs/            # 위 문서 가이드 전체
 ├── interfaces/       # msg/action + POI 스키마 (변경 시 3인 승인 필수)
 ├── robot/            # 단일 로봇: description, bringup, hardware, control, navigation
@@ -58,13 +58,13 @@ guide-robot/
 
 ```
 # 시뮬레이션 (예정)
-ros2 launch guide_bringup guide.launch.py use_sim:=true
+ros2 launch jongky_bringup guide.launch.py use_sim:=true
 
 # 목업 하드웨어 (예정)
-ros2 launch guide_bringup guide.launch.py use_mock:=true
+ros2 launch jongky_bringup guide.launch.py use_mock:=true
 
 # 실물 (예정, G6 이후)
-ros2 launch guide_bringup guide.launch.py
+ros2 launch jongky_bringup guide.launch.py
 ```
 
 ## 기여 규칙

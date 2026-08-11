@@ -1,0 +1,310 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- ================================================================
+       종키(Jongky) AMR - 로봇 본체 정의
+
+       [좌표 규약]  +X 전진 / +Y 왼쪽 / +Z 위   (ROS REP-103)
+       [단위]       URDF는 미터(m)/라디안(rad).
+                    메시 STL은 mm로 만들어져 scale="0.001"로 축소함.
+       [원점]       base_link       = 양쪽 구동 바퀴 축의 정중앙
+                    base_footprint  = 그 지점을 구동 바퀴 접지면으로 내린 곳
+
+       [검증됨]     메시 두 개 모두 Z-up, 원점 정합 확인 완료
+       [TBD]        센서 좌표 / 질량은 아직 추정값
+       ================================================================ -->
+
+  <xacro:macro name="insert_robot" params="namespace is_sim:=false cam_tilt_deg laser_yaw_deg tof_pitch_deg tof_yaw_deg">
+
+    <xacro:include filename="$(find jongky_description)/urdf/common/insert_inertia.urdf.xacro"/>
+
+    <!-- ============================================================
+         치수 상수 — 값을 바꿀 일이 있으면 여기만 고치면 된다
+         ============================================================ -->
+
+    <!-- 구동 바퀴 (실측 확정) -->
+    <xacro:property name="wheel_radius"  value="0.0335"/>
+    <!-- 실측 24~25. wheel.stl은 접지면까지 26.97이라 실물과 다르다.
+         비주얼만 2.5mm 두껍게 보이고 물리·좌표에는 영향 없다. -->
+    <xacro:property name="wheel_width"   value="0.0245"/>
+
+    <!-- wheel_y = 트레드/2 = 116.25/2
+
+         실측 3개가 서로 검증된다:
+            바깥면 140,  안쪽면 92.5,  바퀴 폭 24~25
+            (140 − 92.5)/2 = 23.75  ≈ 직접 잰 폭 24~25   ✓
+            트레드 = (140 + 92.5)/2 = 116.25
+
+         메시(wheel.stl)는 폭 27 / 트레드 120.32로 어느 것과도 안 맞는다.
+         검증된 건 base_link.stl이고 wheel.stl은 반지름 33.5 외에
+         대조된 적이 없으므로 실측을 채택한다.
+
+         [미확정] 최종은 제자리 회전 시험이다. 타이어가 눌리면서 생기는
+         실효 트레드는 자로 못 잰다. 1mm = 오도메트리 회전 0.9%. -->
+    <xacro:property name="wheel_y"       value="0.0581"/>
+    <!-- 메시 두께 중심이 0.6mm 치우쳐 있어 보정 -->
+    <xacro:property name="wheel_mesh_dy" value="0.0006"/>
+
+    <!-- 캐스터 (실측 확정, 뒤쪽 2개) -->
+    <xacro:property name="caster_radius" value="0.0125"/>
+    <xacro:property name="caster_x"      value="-0.12523"/>
+    <xacro:property name="caster_y"      value="0.028"/>
+    <xacro:property name="caster_z"      value="${caster_radius - wheel_radius}"/>
+
+    <!-- 메시 실측 bbox (base_link.stl, mm→m 환산)
+         관성 계산은 이 실제 치수로 한다. -->
+    <xacro:property name="body_len"      value="0.24952"/>
+    <!-- 판 폭 148 = 공식 도면값. 메시도 148.0~148.3으로 일치한다.
+         판은 네 모서리가 모따기되어 앞뒤 끝에서 139.7까지 좁아지므로,
+         모서리 근처에서 재면 135쯤 나온다. 가운데를 재야 한다. -->
+    <xacro:property name="body_wid_real" value="0.148"/>
+    <xacro:property name="body_hgt_real" value="0.27180"/>
+    <xacro:property name="body_cx"       value="-0.05139"/>
+    <xacro:property name="body_com_z"    value="0.10155"/>
+    <xacro:property name="body_top_z"    value="0.23745"/>
+
+    <!-- base_link 콜리전 박스
+         폭 280은 판 사이 배선 마진을 포함한 의도된 값(실제 차체 폭은 165).
+         좁은 통로를 못 지나가면 body_wid만 줄이면 된다.
+
+         [중요] 박스 하단은 메시 bbox 하단(-34.35mm)이 아니라 캐스터 구
+         상단에 맞춘다. 메시 bbox를 그대로 쓰면 박스 바닥이 접지면
+         (-33.5mm)보다 0.85mm 아래로 내려가고, 그러면 바퀴 구슬과 캐스터
+         구슬이 모두 박스 안에 파묻혀 지면에 닿지 않는다. 로봇이 바퀴가
+         아니라 차체 박스로 바닥에 얹혀 미끄러지게 된다. -->
+    <xacro:property name="body_wid"      value="0.28011"/>
+    <xacro:property name="body_bot_z"    value="${caster_z + caster_radius}"/>
+    <xacro:property name="body_hgt"      value="${body_top_z - body_bot_z}"/>
+    <xacro:property name="body_cz"       value="${(body_top_z + body_bot_z)/2}"/>
+
+    <!-- 센서 위치 (TBD — 전부 추정값, 실측 후 교체할 것) -->
+    <xacro:property name="laser_x"       value="0.01174"/>
+    <xacro:property name="laser_z"       value="0.21925"/>
+    <!-- 카메라 — 앞뒤(x)는 메시에서 부품을 직접 찾아 잡았다.
+         메시 길이 249.5는 실측 245~250과 일치하고, 판 229.1은 공식
+         브래킷 228과 일치하므로 x 방향은 메시를 신뢰한다.
+         (줄자로 잰 x는 바퀴축 위치를 눈으로 잡느라 10~15mm 밀렸다)
+
+         아스트라   : 메시상 x 33.2~73.4, 바닥 188.0~210.3
+                      렌즈는 앞면(73.4) 바로 뒤 → x 0.070
+         후방 IMX   : 메시상 x −176.1~−154.8, 바닥 131.6~146.2
+                      렌즈는 뒷면(−176.1) 바로 앞 → x −0.174
+                      높이 138.9는 실측 130~150과 일치 ✓ -->
+    <xacro:property name="cam_x"         value="0.070"/>
+    <xacro:property name="cam_z"         value="0.1656"/>
+    <xacro:property name="rear_cam_x"    value="-0.174"/>
+    <xacro:property name="rear_cam_z"    value="0.1054"/>
+    <!-- TOF (실측 반영 — 줄자 눈대중이라 ±5mm.
+         TOF는 단일점 거리센서라 빔 원뿔에 비하면 이 정도 오차는 무시된다.
+         바닥에서 115 → base_link 기준 115 − 33.5 = 81.5 -->
+    <xacro:property name="tof_x"         value="0.050"/>
+    <xacro:property name="tof_y"         value="0.075"/>
+    <xacro:property name="tof_z"         value="0.0815"/>
+    <xacro:property name="imu_x"         value="-0.050"/>
+    <xacro:property name="imu_z"         value="0.080"/>
+
+    <!-- 질량 — 로봇 전체 실측 2.603 kg (저울)
+         바퀴는 따로 안 쟀다. 지름 67 × 폭 24.5 고무/플라스틱 바퀴로
+         50g 추정하고, 나머지를 몸통에 몰아준다.
+            2.603 − 0.05×2 = 2.503
+         바퀴 질량은 몸통의 2%라 추정 오차가 결과에 거의 영향 없다. -->
+    <xacro:property name="body_mass"     value="2.503"/>
+    <xacro:property name="wheel_mass"    value="0.05"/>
+
+    <xacro:property name="mesh_scale"    value="0.001 0.001 0.001"/>
+
+
+    <!-- ============================================================
+         base_footprint : 바닥 기준 프레임
+         메시도 질량도 없는 순수 좌표. 내비게이션이 기준으로 쓴다.
+         ============================================================ -->
+    <link name="base_footprint"/>
+
+    <joint name="base_footprint_joint" type="fixed">
+      <parent link="base_footprint"/>
+      <child  link="base_link"/>
+      <origin xyz="0 0 ${wheel_radius}" rpy="0 0 0"/>
+    </joint>
+
+
+    <!-- ============================================================
+         base_link : 로봇 몸통 전체
+         판 4장, 젯슨, 야붐 보드, 배터리, 디스플레이, 스탠드오프,
+         모터, 캐스터, 센서 껍데기까지 전부 이 링크 하나.
+
+         콜리전은 메시가 아니라 박스 1개 + 캐스터 구슬 2개.
+         물리 엔진은 primitive를 해석적으로 계산해서 메시보다 빠르고
+         안정적이다.
+         ============================================================ -->
+    <link name="base_link">
+
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://jongky_description/meshes/visual/base_link.stl"
+                scale="${mesh_scale}"/>
+        </geometry>
+        <material name="body_gray">
+          <color rgba="0.42 0.44 0.47 1.0"/>
+        </material>
+      </visual>
+
+      <!-- 차체 충돌 박스 -->
+      <collision>
+        <origin xyz="${body_cx} 0 ${body_cz}" rpy="0 0 0"/>
+        <geometry>
+          <box size="${body_len} ${body_wid} ${body_hgt}"/>
+        </geometry>
+      </collision>
+
+      <!-- 왼쪽 캐스터 : 별도 링크 없이 base_link의 충돌 구슬로 처리 -->
+      <collision>
+        <origin xyz="${caster_x} ${caster_y} ${caster_z}" rpy="0 0 0"/>
+        <geometry>
+          <sphere radius="${caster_radius}"/>
+        </geometry>
+      </collision>
+
+      <!-- 오른쪽 캐스터 -->
+      <collision>
+        <origin xyz="${caster_x} ${-caster_y} ${caster_z}" rpy="0 0 0"/>
+        <geometry>
+          <sphere radius="${caster_radius}"/>
+        </geometry>
+      </collision>
+
+      <!-- 관성은 콜리전 박스가 아니라 실제 차체 치수로 계산한다.
+           마진 포함된 body_wid(280)를 넣으면 izz가 1.6배로 부풀어
+           제자리 회전이 실제보다 둔해진다. -->
+      <inertial>
+        <origin xyz="${body_cx} 0 ${body_com_z}" rpy="0 0 0"/>
+        <mass value="${body_mass}"/>
+        <xacro:box_inertia m="${body_mass}" x="${body_len}" y="${body_wid_real}" z="${body_hgt_real}"/>
+      </inertial>
+    </link>
+
+
+    <!-- ============================================================
+         구동 바퀴 : 좌우 대칭이므로 매크로로 한 번만 작성
+         side = 이름에 붙는 글자, dir = +1(왼쪽) / -1(오른쪽)
+
+         [중요] joint의 rpy는 좌우 모두 "0 0 0"이다.
+         여기에 180도를 주면 axis까지 뒤집혀 오른쪽 바퀴가 거꾸로 돈다.
+         메시 좌우 반전은 <visual><origin>에서만 처리한다.
+
+         [중요] 콜리전이 원통이 아니라 구슬이다.
+         원통은 바닥과 선으로 닿아 접촉점이 흔들리지만,
+         구슬은 항상 한 점으로 닿아 안정적이고 지름이 같아
+         굴러간 거리도 동일하다.
+
+         메시는 이미 회전축이 Y라서 rpy 보정이 필요 없다.
+         ============================================================ -->
+    <xacro:macro name="insert_wheel" params="side dir">
+
+      <link name="${side}_wheel">
+        <visual>
+          <origin xyz="0 ${dir*wheel_mesh_dy} 0" rpy="0 0 ${(1-dir)*pi/2}"/>
+          <geometry>
+            <mesh filename="package://jongky_description/meshes/visual/wheel.stl"
+                  scale="${mesh_scale}"/>
+          </geometry>
+          <material name="wheel_black">
+            <color rgba="0.11 0.11 0.12 1.0"/>
+          </material>
+        </visual>
+
+        <collision>
+          <origin xyz="0 0 0" rpy="0 0 0"/>
+          <geometry>
+            <sphere radius="${wheel_radius}"/>
+          </geometry>
+        </collision>
+
+        <!-- cylinder_inertia는 회전축이 z인 공식이다. 이 바퀴의 joint
+             axis는 y이므로 origin에서 x축으로 90도 돌려 실린더 z축을
+             y축에 맞춘다. 안 돌리면 스핀축 관성이 1.64배 어긋난다. -->
+        <inertial>
+          <origin xyz="0 0 0" rpy="${pi/2} 0 0"/>
+          <mass value="${wheel_mass}"/>
+          <xacro:cylinder_inertia m="${wheel_mass}" r="${wheel_radius}" h="${wheel_width}"/>
+        </inertial>
+      </link>
+
+      <joint name="${side}_wheel_joint" type="continuous">
+        <parent link="base_link"/>
+        <child  link="${side}_wheel"/>
+        <axis   xyz="0 1 0"/>
+        <origin xyz="0 ${dir*wheel_y} 0" rpy="0 0 0"/>
+      </joint>
+
+    </xacro:macro>
+
+    <xacro:insert_wheel side="l" dir="1"/>
+    <xacro:insert_wheel side="r" dir="-1"/>
+
+
+    <!-- ============================================================
+         센서 프레임 : 메시도 질량도 없는 빈 링크.
+         "이 센서가 로봇 어디에 붙어 있는가"만 알려주는 좌표점이다.
+         아래 좌표는 전부 추정값이므로 실측 후 위 property를 고칠 것.
+         ============================================================ -->
+
+    <!-- RPLIDAR 스캔 평면.
+         실물에서 케이블/커넥터가 로봇 뒤쪽을 향하도록 장착되어 있다.
+         RPLIDAR는 커넥터 쪽이 0도 기준이므로, 그대로 두면 스캔이
+         앞뒤로 뒤집혀 SLAM 지도가 반대로 그려진다.
+         따라서 yaw를 180도(${pi}) 돌려 로봇 정면과 0도를 일치시킨다.
+
+         검증법: RViz에서 LaserScan을 띄우고 로봇 앞에 벽을 두었을 때
+         점들이 +X 쪽에 찍히면 정상. -X에 찍히면 이 값을 0으로 되돌릴 것. -->
+    <link name="laser"/>
+    <joint name="laser_joint" type="fixed">
+      <parent link="base_link"/>
+      <child  link="laser"/>
+      <origin xyz="${laser_x} 0 ${laser_z}" rpy="0 0 ${laser_yaw_deg*pi/180}"/>
+    </joint>
+
+    <!-- 아스트라 뎁스 카메라. 광학 프레임은 드라이버가 붙인다. -->
+    <link name="camera_link"/>
+    <joint name="camera_joint" type="fixed">
+      <parent link="base_link"/>
+      <child  link="camera_link"/>
+      <origin xyz="${cam_x} 0 ${cam_z}" rpy="0 ${cam_tilt_deg*pi/180} 0"/>
+    </joint>
+
+    <!-- 후방 카메라 (IMX219) -->
+    <link name="rear_camera_link"/>
+    <joint name="rear_camera_joint" type="fixed">
+      <parent link="base_link"/>
+      <child  link="rear_camera_link"/>
+      <origin xyz="${rear_cam_x} 0 ${rear_cam_z}" rpy="0 0 ${pi}"/>
+    </joint>
+
+    <!-- TOF400F 2개. pitch로 숙이고 yaw로 좌우로 벌린다.
+         실행 인자로 각도를 바꿀 수 있어 브래킷을 바꿔도 파일 수정 불필요. -->
+    <link name="tof_l_link"/>
+    <joint name="tof_l_joint" type="fixed">
+      <parent link="base_link"/>
+      <child  link="tof_l_link"/>
+      <origin xyz="${tof_x} ${tof_y} ${tof_z}"
+              rpy="0 ${tof_pitch_deg*pi/180} ${tof_yaw_deg*pi/180}"/>
+    </joint>
+
+    <link name="tof_r_link"/>
+    <joint name="tof_r_joint" type="fixed">
+      <parent link="base_link"/>
+      <child  link="tof_r_link"/>
+      <origin xyz="${tof_x} ${-tof_y} ${tof_z}"
+              rpy="0 ${tof_pitch_deg*pi/180} ${-tof_yaw_deg*pi/180}"/>
+    </joint>
+
+    <!-- 야붐 제어보드 내장 IMU -->
+    <link name="imu_link"/>
+    <joint name="imu_joint" type="fixed">
+      <parent link="base_link"/>
+      <child  link="imu_link"/>
+      <origin xyz="${imu_x} 0 ${imu_z}" rpy="0 0 0"/>
+    </joint>
+
+  </xacro:macro>
+</robot>
