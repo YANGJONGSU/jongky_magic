@@ -17,9 +17,10 @@ ARG ROS_DISTRO=jazzy
 ENV ROS_DISTRO=${ROS_DISTRO}
 ENV DEBIAN_FRONTEND=noninteractive
 
-# ros2_control 스택과 로봇 모델 도구.
-# 센서 드라이버는 아직 넣지 않는다 — 라이다/아스트라는 별도 검증 후 추가.
+# ros2_control 스택과 로봇 모델 도구, 그리고 라이다 드라이버.
+# 아스트라(astra_camera)는 별도 검증 후 추가한다.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+      ros-${ROS_DISTRO}-rplidar-ros \
       ros-${ROS_DISTRO}-ros2-control \
       ros-${ROS_DISTRO}-ros2-controllers \
       ros-${ROS_DISTRO}-controller-manager \

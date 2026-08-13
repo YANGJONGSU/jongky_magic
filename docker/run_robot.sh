@@ -12,6 +12,10 @@
 #
 #   컨테이너 안에서는 JONGKY_YAHBOOM_PORT / JONGKY_LIDAR_PORT 환경변수로
 #   경로를 받는다.
+#
+# --cap-add SYS_NICE
+#   없으면 controller_manager 가 FIFO 실시간 스케줄링을 못 잡는다.
+#   지금은 50Hz 가 잘 나오지만 부하가 늘면 주기 지터가 생긴다.
 set -euo pipefail
 
 IMAGE="${JONGKY_IMAGE:-jongky:jazzy}"
@@ -41,6 +45,7 @@ mkdir -p "$WS/src"
 exec docker run -it --rm \
   --network host \
   --ipc host \
+  --cap-add SYS_NICE \
   --pid host \
   -v "$WS:/ws" \
   -v /dev/shm:/dev/shm \
