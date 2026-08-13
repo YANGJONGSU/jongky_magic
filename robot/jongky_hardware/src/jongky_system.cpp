@@ -66,6 +66,10 @@ hardware_interface::CallbackReturn JongkySystemHardware::on_init(
   wheel_radius_ = get_param(info_, "wheel_radius", wheel_radius_);
   wheel_separation_ = get_param(info_, "wheel_separation", wheel_separation_);
   board_vel_scale_ = get_param(info_, "board_vel_scale", board_vel_scale_);
+  // 음수면 "지정 안 함" 이고 보드의 현재 값을 그대로 쓴다.
+  pid_kp_ = get_param(info_, "motor_pid_kp", -1.0);
+  pid_ki_ = get_param(info_, "motor_pid_ki", -1.0);
+  pid_kd_ = get_param(info_, "motor_pid_kd", -1.0);
 
   if (board_vel_scale_ <= 0.0) {
     RCLCPP_ERROR(rclcpp::get_logger(kLogger), "board_vel_scale 은 양수여야 함");
@@ -151,12 +155,28 @@ hardware_interface::CallbackReturn JongkySystemHardware::on_configure(
   double bkp = -1.0, bki = -1.0, bkd = -1.0;
   if (board_.get_motor_pid(bkp, bki, bkd)) {
     RCLCPP_INFO(
-      rclcpp::get_logger(kLogger), "보드 기본 PID kp=%.3f ki=%.3f kd=%.3f", bkp, bki, bkd);
-    pid_kp_ = bkp;
-    pid_ki_ = bki;
-    pid_kd_ = bkd;
+      rclcpp::get_logger(kLogger), "보드 현재 PID kp=%.3f ki=%.3f kd=%.3f", bkp, bki, bkd);
+    // URDF 에서 값을 안 준 항목만 보드 값을 따른다.
+    if (pid_kp_ < 0.0) { pid_kp_ = bkp; }
+    if (pid_ki_ < 0.0) { pid_ki_ = bki; }
+    if (pid_kd_ < 0.0) { pid_kd_ = bkd; }
   } else {
     RCLCPP_WARN(rclcpp::get_logger(kLogger), "보드 PID 게인을 읽지 못했다");
+  }
+
+  // URDF 로 지정된 게인을 적용한다. 보드 설정은 휘발성이라
+  // 전원을 껐다 켜면 공장값으로 돌아가므로 기동할 때마다 다시 쓴다.
+  if (pid_kp_ >= 0.0 && pid_ki_ >= 0.0 && pid_kd_ >= 0.0 &&
+      (std::abs(pid_kp_ - bkp) > 1e-6 || std::abs(pid_ki_ - bki) > 1e-6 ||
+       std::abs(pid_kd_ - bkd) > 1e-6))
+  {
+    if (board_.set_motor_pid(pid_kp_, pid_ki_, pid_kd_, false)) {
+      RCLCPP_INFO(
+        rclcpp::get_logger(kLogger), "PID 적용 kp=%.3f ki=%.3f kd=%.3f",
+        pid_kp_, pid_ki_, pid_kd_);
+    } else {
+      RCLCPP_WARN(rclcpp::get_logger(kLogger), "PID 적용 실패");
+    }
   }
 
   // PID 게인을 ROS 파라미터로 노출한다. 음수면 보드 기본값을 건드리지 않는다.

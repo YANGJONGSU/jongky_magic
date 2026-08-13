@@ -38,11 +38,11 @@ diff_drive_controller:
     left_wheel_names:  ["l_wheel_joint"]
     right_wheel_names: ["r_wheel_joint"]
 
-    # jongky_description 의 값과 반드시 일치시킬 것.
-    # [미확정] wheel_separation 은 줄자 실측 기반 잠정값이다.
-    #          제자리 10바퀴 회전 후 /odom yaw 와 실제 3600도를 비교해
-    #          `새 값 = 현재값 x (오도메트리 각 / 3600)` 으로 보정한다.
-    wheel_separation: 0.11625
+    # jongky_description 의 wheel_y*2 와 반드시 일치시킬 것.
+    # 제자리 5바퀴 회전 3회로 확정 (118.03 / 119.55 / 119.71 의 평균).
+    # 관절 변화량과 실제 회전각으로 역산한다 — odom 누적값을 쓰면
+    # 감속 구간이 빠져 보정 부호가 뒤집힌다.
+    wheel_separation: 0.11909
     wheel_radius:     0.0335
 
     # 보정 계수. 위 값을 직접 고치는 대신 이쪽을 쓰면

@@ -15,11 +15,16 @@
   # 주행 품질 진단 — 지그재그 원인 가리기
   python3 jongky_calib.py trace --vx 0.2 --dur 8
 
-  # 보드 PID 게인 스윕 — 진동이 최소가 되는 지점 찾기
-  #   바퀴를 띄워놓고 하면 공간도 안 쓰고 결과도 같다
-  python3 jongky_calib.py pidsweep --vx 0.2
+  # 보드 PID 게인 스윕
+  #   kp: 진동이 최소가 되는 지점 찾기 (바퀴를 띄워놓고 해도 된다)
+  #   ki: 저속에서 약한 모터가 데드밴드를 넘게 하는 값 찾기
+  python3 jongky_calib.py pidsweep --sweep kp --values 0.4,0.8,1.2 --ki 0.06 --kd 0.5
+  python3 jongky_calib.py pidsweep --sweep ki --values 0.06,0.1,0.2,0.3 --vx 0.1
 
-주의: straight · spin · trace 는 로봇을 실제로 움직인다.
+  # 방향 제어 직진 — 폐루프로 헤딩을 잡으며 간다
+  python3 jongky_calib.py hold --vx 0.2 --dur 10
+
+주의: straight · spin · trace · hold 는 로봇을 실제로 움직인다.
 """
 import argparse
 import math
@@ -27,7 +32,10 @@ import statistics
 import sys
 import time
 
+import threading
+
 import rclpy
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
 from rcl_interfaces.srv import SetParameters
@@ -44,7 +52,13 @@ def yaw_of(q):
 
 
 class Recorder(Node):
-    """cmd_vel 을 쏘면서 odom / joint_states / imu 를 고속으로 기록한다."""
+    """cmd_vel 을 쏘면서 odom / joint_states / imu 를 고속으로 기록한다.
+
+    [중요] 콜백은 반드시 별도 스레드에서 계속 돌려야 한다.
+    토픽 3개가 각 50Hz 면 초당 150개인데, 제어 루프 안에서
+    spin_once 를 한 번씩만 부르면 큐가 밀려 낡은 값을 보게 된다.
+    그 상태로 되먹임 제어를 하면 발산한다.
+    """
 
     def __init__(self):
         super().__init__('jongky_calib')
@@ -58,6 +72,13 @@ class Recorder(Node):
             Odometry, '/diff_drive_controller/odom', self._odom, 20)
         self.create_subscription(JointState, '/joint_states', self._js, 20)
         self.create_subscription(Imu, '/imu_sensor_broadcaster/imu', self._imu, 20)
+        self._exec = SingleThreadedExecutor()
+        self._exec.add_node(self)
+        self._spin = threading.Thread(target=self._exec.spin, daemon=True)
+        self._spin.start()
+
+    def shutdown(self):
+        self._exec.shutdown()
 
     def _odom(self, m):
         self.odom = m
@@ -78,9 +99,9 @@ class Recorder(Node):
     def wait_ready(self, need_imu=False, timeout=6.0):
         t0 = time.time()
         while time.time() - t0 < timeout:
-            rclpy.spin_once(self, timeout_sec=0.05)
             if self.odom and self.js and (self.imu or not need_imu):
                 return True
+            time.sleep(0.02)
         return False
 
     def snapshot(self):
@@ -93,7 +114,6 @@ class Recorder(Node):
         try:
             while time.time() - t0 < dur:
                 self.send(vx, vz)
-                rclpy.spin_once(self, timeout_sec=0.01)
                 if record and self.js and len(self.js.velocity) >= 2:
                     self.trace.append((
                         time.time() - t0,
@@ -105,11 +125,8 @@ class Recorder(Node):
         finally:
             for _ in range(12):
                 self.send(0.0, 0.0)
-                rclpy.spin_once(self, timeout_sec=0.01)
                 time.sleep(0.04)
-        t0 = time.time()
-        while time.time() - t0 < 1.5:
-            rclpy.spin_once(self, timeout_sec=0.05)
+        time.sleep(1.5)
 
 
 def dominant_freq(t, y):
@@ -144,7 +161,9 @@ def trace_stats(tr, skip):
     return dict(
         ml=ml, mr=mr,
         cvl=100 * sl / max(abs(ml), 1e-6), cvr=100 * sr / max(abs(mr), 1e-6),
-        corr=corr, gz=statistics.pstdev(gz) if gz else float('nan'))
+        corr=corr,
+        gz=statistics.pstdev(gz) if gz else float('nan'),
+        gzmean=statistics.fmean(gz) if gz else float('nan'))
 
 
 def report_trace(tr, skip=2.5):
@@ -255,48 +274,237 @@ def cmd_straight(n, a):
 
 
 def cmd_spin(n, a):
-    if not n.wait_ready():
-        print("odom/joint_states 수신 실패")
+    """제자리 회전으로 wheel_separation 을 검산한다.
+
+    odom 기준으로 정확히 N 바퀴 돈 뒤 멈춘다. 로봇 정면이 출발 표시로
+    돌아왔으면 트레드가 맞은 것이고, 어긋난 만큼이 오차다.
+
+    자이로도 같이 적분한다. 회전량이 크므로(5바퀴=1800도) 바이어스
+    영향은 무시할 수준이고, odom 과 독립적인 검증이 된다.
+    """
+    if not n.wait_ready(need_imu=True, timeout=8.0):
+        print("odom/joint_states/imu 수신 실패")
         return
+
     _, _, th0, j0 = n.snapshot()
-    total = 0.0
-    prev = th0
+    s = []
+    t = time.time()
+    while time.time() - t < 2.0:
+        time.sleep(0.02)
+        if n.imu:
+            s.append(n.imu.angular_velocity.z)
+    bias = statistics.fmean(s) if s else 0.0
+    print("자이로 바이어스 %+.5f rad/s" % bias)
+
     target = a.turns * 2 * math.pi
-    print(">>> 제자리 회전 %.2f rad/s, 목표 %.1f 바퀴" % (a.vz, a.turns))
-    t0 = time.time()
+    print(">>> 제자리 회전 %.2f rad/s, odom 기준 %.1f 바퀴" % (a.vz, a.turns))
+    print("    바닥에 로봇 정면 방향을 표시해 두었는지 확인하세요\n")
+
+    total = 0.0
+    gyro = 0.0
+    prev_th = th0
+    prev_t = time.time()
+    t0 = prev_t
     try:
-        while abs(total) < target and time.time() - t0 < a.turns * 20:
+        while abs(total) < target and time.time() - t0 < a.turns * 25:
             n.send(0.0, a.vz)
-            rclpy.spin_once(n, timeout_sec=0.01)
-            cur = yaw_of(n.odom.pose.pose.orientation)
-            d = cur - prev
+            _, _, cur, _ = n.snapshot()
+            d = cur - prev_th
             while d > math.pi:
                 d -= 2 * math.pi
             while d < -math.pi:
                 d += 2 * math.pi
             total += d
-            prev = cur
-            time.sleep(0.01)
+            prev_th = cur
+
+            now = time.time()
+            if n.imu:
+                gyro += (n.imu.angular_velocity.z - bias) * (now - prev_t)
+            prev_t = now
+            time.sleep(0.02)
     finally:
         for _ in range(12):
             n.send(0.0, 0.0)
-            rclpy.spin_once(n, timeout_sec=0.01)
             time.sleep(0.04)
-    print("\n=== 회전 결과 ===")
-    print("odom 누적 회전 %.1f 도 (%.3f 바퀴)"
-          % (math.degrees(total), total / (2 * math.pi)))
-    print("\n실제 회전한 바퀴 수를 세어서:")
-    print("  새 wheel_separation = 현재값 × (odom바퀴수 / 실제바퀴수)")
-    print("  odom 이 더 많이 돌았다고 하면 트레드를 늘린다")
+    time.sleep(1.5)
+
+    _, _, th1, j1 = n.snapshot()
+    dj = [j1[i] - j0[i] for i in range(len(j0))]
+    odom_turns = total / (2 * math.pi)
+    gyro_turns = gyro / (2 * math.pi)
+
+    # [중요] 트레드는 관절 변화량으로 역산한다. 위의 total 은 목표에
+    # 닿는 순간 누적을 끊으므로 감속하며 더 도는 부분이 빠져 있다.
+    # 눈으로 읽는 각도는 완전히 멈춘 뒤의 값이라 그 감속분을 포함한다.
+    # 둘을 섞어 비교하면 보정 부호가 뒤집힌다 — 실제로 한 번 그랬다.
+    joint_diff = dj[1] - dj[0]
+
+    print("=== 결과 ===")
+    print("odom 누적 회전   %+.1f 도  (%.3f 바퀴)" % (math.degrees(total), odom_turns))
+    print("자이로 적분      %+.1f 도  (%.3f 바퀴)" % (math.degrees(gyro), gyro_turns))
+    print("관절 변화        좌 %+.2f  우 %+.2f rad" % (dj[0], dj[1]))
+    if abs(odom_turns) > 1e-6:
+        ratio = gyro_turns / odom_turns
+        print("자이로/odom 비   %.4f" % ratio)
+        print()
+        print("자이로 기준 보정: wheel_separation %.5f -> %.5f"
+              % (a.tread, a.tread * ratio))
+    print()
+    print("--- 눈으로 확인 ---")
+    print("로봇 정면이 출발 표시에서 몇 도 어긋났는지 보세요.")
+    print("  표시와 일치        -> 트레드가 맞다")
+    print("  덜 돌았다(모자람)  -> odom 이 과대평가. 트레드를 줄인다")
+    print("  더 돌았다(지나침)  -> odom 이 과소평가. 트레드를 늘린다")
+    print()
+    print("--- 트레드 역산 (관절 기준, 감속 포함) ---")
+    print("  L = 바퀴반지름 x (관절_우 - 관절_좌) / 실제회전각")
+    print("    = %.4f x %.2f rad / (실제각/57.3)" % (WHEEL_RADIUS, joint_diff))
+    for deg in (math.degrees(total) - 20, math.degrees(total), math.degrees(total) + 20):
+        L = WHEEL_RADIUS * joint_diff / math.radians(deg)
+        print("    실제 %7.1f 도 -> %.2f mm" % (deg, L * 1000))
+    print("  실제 회전각을 넣어 계산하세요. odom 누적값(%.1f도)을 쓰면 안 됩니다."
+          % math.degrees(total))
+    print()
+    print("주의: 캐스터가 2개라 제자리 회전 시 둘 다 비틀리며 바닥을 긁는다.")
+    print("      그 저항으로 구동륜이 미끄러지면 odom 과 자이로가 크게")
+    print("      어긋난다. 비가 1.0 에서 많이 벗어나면 슬립을 의심할 것.")
 
 
 def cmd_trace(n, a):
+    """주행 품질 진단 — 지그재그·편향의 원인을 가린다."""
     if not n.wait_ready(need_imu=True, timeout=8.0):
         print("odom/joint_states/imu 수신 실패 — imu_sensor_broadcaster 확인")
         return
     print(">>> 주행 %.2f m/s, %.1f초 기록" % (a.vx, a.dur))
     n.run(a.vx, 0.0, a.dur, record=True)
     report_trace(n.trace, a.skip)
+
+
+def cmd_hold(n, a):
+    """방향 제어 직진.
+
+    차동구동 로봇은 개루프로 직진할 수 없다. 좌우 어떤 미세한 차이도
+    헤딩 오차로 적분되기 때문이다. 방향을 되먹임해서 vz 로 밀어주면
+    좌우 특성이 달라도 직진한다.
+
+    기준은 odom yaw 다 — nav2 가 쓰는 것과 같은 값이라, 이게 되면
+    캘리브레이션과 제어 사슬 전체가 검증된다. 물리적으로도 곧게
+    가는지는 자이로로 따로 잰다.
+    """
+    if not n.wait_ready(need_imu=True, timeout=8.0):
+        print("odom/joint_states/imu 수신 실패")
+        return
+
+    x0, y0, th0, _ = n.snapshot()
+    # 자이로 바이어스. 짧은 주행이라 이 정도면 충분하다.
+    s = []
+    t = time.time()
+    while time.time() - t < 1.5:
+        time.sleep(0.02)
+        if n.imu:
+            s.append(n.imu.angular_velocity.z)
+    bias = statistics.fmean(s) if s else 0.0
+
+    print(">>> 방향 제어 직진 %.2f m/s, %.1f초  (kp=%.1f)" % (a.vx, a.dur, a.kp))
+    gyro_yaw = 0.0
+    errs = []
+    vzs = []
+    rates = []
+    rate = 0.0
+    i_term = 0.0
+    prev = time.time()
+    t0 = prev
+    try:
+        while time.time() - t0 < a.dur:
+            _, _, th, _ = n.snapshot()
+            err = th - th0
+            while err > math.pi:
+                err -= 2 * math.pi
+            while err < -math.pi:
+                err += 2 * math.pi
+            # 헤딩 오차에 비례해 반대로 민다. 좌우 모터가 달라도
+            # 틀어지는 즉시 되돌리므로 직진한다.
+            #
+            # 미분항은 자이로 각속도를 그대로 쓴다. 보드 가속 램프가
+            # 느려 보정이 늦게 반영되는데, P 만 쓰면 그동안 오차가 더
+            # 쌓여 과보정하고 반대로 넘어가기를 반복한다(좌우 진동).
+            # 지금 돌고 있는 속도만큼 미리 빼주면 그게 줄어든다.
+            # 적분항: 거의 일정한 편향(모터 특성차 등)을 학습해서 상쇄한다.
+            # 비례항만 쓰면 오차가 생길 때마다 툭툭 밀어 차체가 움찔거리는데,
+            # 적분은 일정한 보정을 걸어두므로 애초에 오차가 잘 안 생긴다.
+            now_i = time.time()
+            i_term += err * (now_i - prev)
+            # 와인드업 방지
+            i_lim = a.vzmax / max(a.ki, 1e-6)
+            i_term = max(-i_lim, min(i_lim, i_term))
+
+            raw_rate = (n.imu.angular_velocity.z - bias) if n.imu else 0.0
+            # 자이로 원시 각속도는 잡음이 크다(σ 0.05 rad/s 수준). 그대로
+            # 미분항에 쓰면 vz 명령에 잡음이 실려 부호가 계속 뒤집힌다.
+            # 1차 저역통과로 걸러서 쓴다.
+            rate = a.rate_lpf * rate + (1.0 - a.rate_lpf) * raw_rate
+            rates.append(raw_rate)
+            vz = -a.kp * err - a.ki * i_term - a.kd * rate
+            # 데드밴드: 오차가 아주 작으면 건드리지 않는다. 미세 보정이
+            # 계속 들어가면 그 자체가 흔들림이 된다.
+            if abs(err) < math.radians(a.deadband):
+                vz = -a.ki * i_term
+            vz = max(-a.vzmax, min(a.vzmax, vz))
+            n.send(a.vx, vz)
+            errs.append(err)
+            vzs.append(vz)
+            now = time.time()
+            if n.imu:
+                gyro_yaw += (n.imu.angular_velocity.z - bias) * (now - prev)
+            prev = now
+            time.sleep(0.02)
+    finally:
+        for _ in range(12):
+            n.send(0.0, 0.0)
+            time.sleep(0.04)
+    time.sleep(1.5)
+
+    x1, y1, th1, _ = n.snapshot()
+    dx, dy = x1 - x0, y1 - y0
+    # odom 좌표계 그대로 y 를 보면 안 된다. 출발 시 로봇이 odom 상에서
+    # 어느 방향을 보고 있었는지에 따라 x·y 가 섞이기 때문이다.
+    # 출발 헤딩 기준으로 회전시켜 전진/가로 성분을 나눈다.
+    fwd = dx * math.cos(th0) + dy * math.sin(th0)
+    lat = -dx * math.sin(th0) + dy * math.cos(th0)
+    dth = th1 - th0
+    while dth > math.pi:
+        dth -= 2 * math.pi
+    while dth < -math.pi:
+        dth += 2 * math.pi
+
+    print("\n=== 결과 ===")
+    print("전진 거리        %.0f mm" % (fwd * 1000))
+    print("가로 이탈        %+.0f mm   (%.2f%% of 전진)"
+          % (lat * 1000, 100 * lat / fwd if abs(fwd) > 1e-6 else 0))
+    print("odom 헤딩 변화   %+.2f 도" % math.degrees(dth))
+    print("자이로 적분      %+.2f 도   <- 물리적으로 실제 돈 각도" % math.degrees(gyro_yaw))
+    if errs:
+        print("헤딩 오차 RMS    %.2f 도"
+              % math.degrees(math.sqrt(sum(e * e for e in errs) / len(errs))))
+    if rates:
+        # 실제 흔들림은 자이로 각속도의 변동으로 잰다. vz 명령의 부호
+        # 전환 횟수는 명령의 잡음일 뿐 물리적 흔들림이 아니다.
+        print("자이로 각속도 σ  %.4f rad/s  (%.2f 도/초)  <- 실제 흔들림"
+              % (statistics.pstdev(rates), math.degrees(statistics.pstdev(rates))))
+    if vzs:
+        print("보정 명령 RMS    %.3f rad/s" % math.sqrt(sum(v * v for v in vzs) / len(vzs)))
+    print()
+    # 판정은 자이로로 한다. 제어기가 odom 을 기준으로 잡고 있으므로
+    # odom 헤딩이 0 인 건 당연하고, 물리적으로 곧았는지는 자이로만 안다.
+    gyro_deg = abs(math.degrees(gyro_yaw))
+    if gyro_deg < 2.0:
+        print("물리적으로 직진했다 (%.1f m 에 %.2f 도)." % (fwd, gyro_deg))
+    elif gyro_deg < 5.0:
+        print("거의 직진했다 (%.1f m 에 %.2f 도). kp 를 올리면 더 줄어든다." % (fwd, gyro_deg))
+    else:
+        print("아직 휜다 (%.1f m 에 %.2f 도)." % (fwd, gyro_deg))
+        print("odom 기준으로는 잡고 있는데 물리적으로 휜다면 "
+              "오도메트리 캘리브레이션이 남은 것이다.")
 
 
 def cmd_pidsweep(n, a):
@@ -318,7 +526,10 @@ def cmd_pidsweep(n, a):
             p.value = ParameterValue(type=ParameterType.PARAMETER_DOUBLE, double_value=float(v))
             req.parameters.append(p)
         fut = cli.call_async(req)
-        rclpy.spin_until_future_complete(n, fut, timeout_sec=5.0)
+        for _ in range(100):
+            if fut.done():
+                break
+            time.sleep(0.05)
         r = fut.result()
         return bool(r and all(x.successful for x in r.results))
 
@@ -328,31 +539,39 @@ def cmd_pidsweep(n, a):
 
     # 목표 바퀴 각속도. 이보다 크게 처지면 게인이 너무 낮아 제어가 죽은 것이다.
     target_w = a.vx / WHEEL_RADIUS
-    gains = [float(x) for x in a.kp.split(',')]
-    print("게인 스윕: kp = %s  (ki=%.2f kd=%.2f 고정)" % (gains, a.ki, a.kd))
-    print("각 시행 %.0f초, 앞 %.1f초 제외\n" % (a.dur, a.skip))
-    print("   kp     좌변동   우변동   상관    자이로σ    평균속도   목표대비")
-    print("  " + "-" * 68)
+    values = [float(x) for x in a.values.split(',')]
+    base = {'kp': a.kp, 'ki': a.ki, 'kd': a.kd}
+    fixed = ", ".join("%s=%.3f" % (k, v) for k, v in base.items() if k != a.sweep)
+    print("게인 스윕: %s = %s   (%s 고정)" % (a.sweep, values, fixed))
+    print("명령 %.2f m/s, 각 시행 %.0f초, 앞 %.1f초 제외\n" % (a.vx, a.dur, a.skip))
+    print("  %-5s  좌평균  우평균   좌우차   좌변동  우변동  자이로평균  목표대비"
+          % a.sweep)
+    print("  " + "-" * 70)
 
     rows = []
-    for kp in gains:
-        if not set_pid(kp, a.ki, a.kd):
-            print("  %.2f   PID 설정 실패" % kp)
+    for val in values:
+        g = dict(base)
+        g[a.sweep] = val
+        if not set_pid(g['kp'], g['ki'], g['kd']):
+            print("  %.2f   PID 설정 실패" % val)
             continue
         time.sleep(0.5)
         n.trace = []
         n.run(a.vx, 0.0, a.dur, record=True)
         st = trace_stats(n.trace, a.skip)
         if not st:
-            print("  %.2f   표본 부족" % kp)
+            print("  %.2f   표본 부족" % val)
             continue
         reach = (st['ml'] + st['mr']) / 2 / max(target_w, 1e-6)
         st['reach'] = reach
-        rows.append((kp, st))
-        flag = "" if reach >= 0.85 else "  <- 속도 미달"
-        print("  %5.2f   %6.1f%%  %6.1f%%  %+.2f   %7.4f   %5.2f/%5.2f  %3.0f%%%s"
-              % (kp, st['cvl'], st['cvr'], st['corr'], st['gz'],
-                 st['ml'], st['mr'], reach * 100, flag))
+        # 좌우 평균 속도 차이 — 저속 비대칭의 직접 지표
+        mean_w = max(abs(st['ml'] + st['mr']) / 2, 1e-6)
+        st['asym'] = 100 * (st['ml'] - st['mr']) / mean_w
+        rows.append((val, st))
+        flag = "" if reach >= 0.85 else "  <- 속도미달"
+        print("  %-5.2f  %6.2f  %6.2f  %+6.1f%%  %5.1f%%  %5.1f%%  %+9.4f  %3.0f%%%s"
+              % (val, st['ml'], st['mr'], st['asym'], st['cvl'], st['cvr'],
+                 st['gzmean'], reach * 100, flag))
         time.sleep(1.0)
 
     # 목표 속도의 85% 를 못 내는 시행은 후보에서 뺀다. 바퀴가 멈춰 있으면
@@ -365,12 +584,16 @@ def cmd_pidsweep(n, a):
         print("  ros2 param get /%s %s.motor_pid_ki" % (a.hw, a.hw))
         return
     if ok:
-        best = min(ok, key=lambda r: (r[1]['cvl'] + r[1]['cvr']) / 2)
-        print("\n진동이 가장 작은 kp = %.2f  (평균 변동 %.1f%%, 목표속도 %.0f%% 도달)"
-              % (best[0], (best[1]['cvl'] + best[1]['cvr']) / 2, best[1]['reach'] * 100))
-        print("적용:  ros2 param set /%s %s.motor_pid_kp %.2f" % (a.hw, a.hw, best[0]))
-        print("\n주의: 게인을 낮추면 진동은 줄지만 응답이 느려진다.")
-        print("      평균속도가 목표보다 크게 처지면 너무 낮춘 것이다.")
+        least_asym = min(ok, key=lambda r: abs(r[1]['asym']))
+        least_osc = min(ok, key=lambda r: (r[1]['cvl'] + r[1]['cvr']) / 2)
+        print("\n좌우 비대칭이 가장 작은 %s = %.2f  (좌우차 %+.1f%%)"
+              % (a.sweep, least_asym[0], least_asym[1]['asym']))
+        print("진동이 가장 작은   %s = %.2f  (평균 변동 %.1f%%)"
+              % (a.sweep, least_osc[0], (least_osc[1]['cvl'] + least_osc[1]['cvr']) / 2))
+        print("\n적용:  ros2 param set /%s %s.motor_pid_%s <값>" % (a.hw, a.hw, a.sweep))
+        print("\n주의: ki 를 올리면 데드밴드를 넘기는 힘이 생겨 저속 비대칭이")
+        print("      줄지만, 너무 크면 오버슈트해서 진동(변동%%)이 늘어난다.")
+        print("      둘이 갈리면 실제 운용 속도에서 다시 재볼 것.")
 
 
 def cmd_fix(a):
@@ -392,9 +615,11 @@ def main():
     p.add_argument('--dur', type=float, default=6.0)
     p.add_argument('--skip', type=float, default=2.5)
 
-    p = sub.add_parser('spin', help='제자리 회전')
-    p.add_argument('--vz', type=float, default=0.8)
+    p = sub.add_parser('spin', help='제자리 회전 — wheel_separation 검산')
+    p.add_argument('--vz', type=float, default=1.0)
     p.add_argument('--turns', type=float, default=5.0)
+    p.add_argument('--tread', type=float, default=0.11625,
+                   help='현재 설정된 wheel_separation')
 
     p = sub.add_parser('trace', help='주행 품질 진단')
     p.add_argument('--vx', type=float, default=0.2)
@@ -402,16 +627,35 @@ def main():
     p.add_argument('--skip', type=float, default=2.5,
                    help='앞부분 가속 램프를 제외할 초 (기본 2.5)')
 
+    p = sub.add_parser('hold', help='방향 제어 직진')
+    p.add_argument('--vx', type=float, default=0.2)
+    p.add_argument('--dur', type=float, default=10.0)
+    p.add_argument('--kp', type=float, default=2.0,
+                   help='헤딩 오차 -> 각속도 비례 게인 (rad/s per rad)')
+    p.add_argument('--kd', type=float, default=0.0,
+                   help='자이로 각속도 감쇠 게인. 좌우 진동을 줄인다')
+    p.add_argument('--ki', type=float, default=0.0,
+                   help='헤딩 오차 적분 게인. 일정한 편향을 학습해 상쇄한다')
+    p.add_argument('--deadband', type=float, default=0.0,
+                   help='이 각도(도) 안에서는 비례 보정을 하지 않는다')
+    p.add_argument('--rate-lpf', dest='rate_lpf', type=float, default=0.8,
+                   help='미분항에 쓰는 각속도의 저역통과 계수 (0~1, 클수록 부드러움)')
+    p.add_argument('--vzmax', type=float, default=0.6,
+                   help='보정 각속도 상한 (rad/s)')
+
     p = sub.add_parser('pidsweep', help='보드 PID 게인 스윕')
     p.add_argument('--vx', type=float, default=0.2)
     p.add_argument('--dur', type=float, default=6.0)
     p.add_argument('--skip', type=float, default=3.0)
-    p.add_argument('--kp', type=str, default='0.2,0.4,0.6,0.8,1.0,1.5',
-                   help='시험할 kp 값들 (쉼표 구분)')
-    p.add_argument('--ki', type=float, required=True,
-                   help='보드 기본 ki. 0 으로 두면 목표 속도에 도달하지 못한다. '
-                        'ros2 param get /jongky jongky.motor_pid_ki 로 확인할 것')
-    p.add_argument('--kd', type=float, default=0.0)
+    p.add_argument('--sweep', choices=['kp', 'ki', 'kd'], default='kp',
+                   help='어느 게인을 훑을지')
+    p.add_argument('--values', type=str, default='0.4,0.8,1.2',
+                   help='시험할 값들 (쉼표 구분)')
+    p.add_argument('--kp', type=float, default=0.8, help='고정할 kp (보드 기본 0.8)')
+    p.add_argument('--ki', type=float, default=0.06,
+                   help='고정할 ki (보드 기본 0.06). 0 으로 두면 목표 속도에 '
+                        '도달하지 못한다')
+    p.add_argument('--kd', type=float, default=0.5, help='고정할 kd (보드 기본 0.5)')
     p.add_argument('--hw', type=str, default='jongky',
                    help='URDF 의 ros2_control 이름')
 
@@ -430,8 +674,9 @@ def main():
     n = Recorder()
     try:
         {'straight': cmd_straight, 'spin': cmd_spin, 'trace': cmd_trace,
-         'pidsweep': cmd_pidsweep}[a.cmd](n, a)
+         'hold': cmd_hold, 'pidsweep': cmd_pidsweep}[a.cmd](n, a)
     finally:
+        n.shutdown()
         n.destroy_node()
         rclpy.shutdown()
 
