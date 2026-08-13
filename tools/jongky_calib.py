@@ -38,7 +38,7 @@ import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
-from rcl_interfaces.srv import SetParameters
+from rcl_interfaces.srv import GetParameters, SetParameters
 from geometry_msgs.msg import TwistStamped
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Imu, JointState
@@ -62,23 +62,30 @@ class Recorder(Node):
 
     def __init__(self):
         super().__init__('jongky_calib')
-        self.pub = self.create_publisher(
-            TwistStamped, '/diff_drive_controller/cmd_vel', 10)
+        # 컨트롤러 기본 이름이 아니라 리맵된 관례 이름을 쓴다. 리맵은
+        # jongky_control/launch/control.launch.py 의 스포너에서 건다.
+        self.pub = self.create_publisher(TwistStamped, '/cmd_vel', 10)
         self.odom = None
         self.js = None
         self.imu = None
         self.trace = []          # (t, vl, vr, gz, odom_wz)
-        self.create_subscription(
-            Odometry, '/diff_drive_controller/odom', self._odom, 20)
+        self.create_subscription(Odometry, '/odom', self._odom, 20)
         self.create_subscription(JointState, '/joint_states', self._js, 20)
-        self.create_subscription(Imu, '/imu_sensor_broadcaster/imu', self._imu, 20)
+        self.create_subscription(Imu, '/imu/data', self._imu, 20)
         self._exec = SingleThreadedExecutor()
         self._exec.add_node(self)
         self._spin = threading.Thread(target=self._exec.spin, daemon=True)
         self._spin.start()
 
     def shutdown(self):
+        # 스핀 스레드가 빠져나오기를 기다렸다가 돌아간다. 기다리지 않으면
+        # 호출자가 이어서 destroy_node() / rclpy.shutdown() 을 하는 동안
+        # 스레드가 아직 실행 중이라 C++ 쪽에서 terminate 로 죽는다
+        # ("terminate called without an active exception"). 결과 출력은
+        # 이미 끝난 뒤라 사람 눈에는 정상 종료처럼 보여서 더 헷갈린다.
         self._exec.shutdown()
+        self._spin.join(timeout=2.0)
+        self._exec.remove_node(self)
 
     def _odom(self, m):
         self.odom = m
@@ -273,6 +280,30 @@ def cmd_straight(n, a):
     report_trace(n.trace, a.skip)
 
 
+def read_tread(n, controller='diff_drive_controller', timeout=5.0):
+    """돌고 있는 컨트롤러에서 wheel_separation 을 읽는다. 실패하면 None."""
+    cli = n.create_client(GetParameters, '/%s/get_parameters' % controller)
+    try:
+        if not cli.wait_for_service(timeout_sec=timeout):
+            return None
+        req = GetParameters.Request()
+        req.names = ['wheel_separation']
+        fut = cli.call_async(req)
+        t = time.time()
+        while not fut.done() and time.time() - t < timeout:
+            time.sleep(0.02)
+        if not fut.done():
+            return None
+        vals = fut.result().values
+        # 파라미터가 없으면 타입 NOT_SET 으로 돌아온다. 0.0 을 트레드로
+        # 쓰면 0 나눗셈이 되므로 값이 있는지 확인한다.
+        if not vals or vals[0].type != ParameterType.PARAMETER_DOUBLE:
+            return None
+        return vals[0].double_value
+    finally:
+        n.destroy_client(cli)
+
+
 def cmd_spin(n, a):
     """제자리 회전으로 wheel_separation 을 검산한다.
 
@@ -285,6 +316,18 @@ def cmd_spin(n, a):
     if not n.wait_ready(need_imu=True, timeout=8.0):
         print("odom/joint_states/imu 수신 실패")
         return
+
+    # 트레드는 컨트롤러에서 직접 읽는다. 도구에 상수로 박아 두면 YAML 을
+    # 고쳐도 여기가 안 따라와서 조용히 틀린 보정값을 뱉는다. 실제로
+    # 캘리브레이션으로 0.11909 가 확정된 뒤에도 기본값 0.11625 가 남아
+    # 있었고, 그걸 기준으로 "0.11510 으로 줄여라" 는 결론이 나왔다.
+    tread = read_tread(n)
+    if tread is not None:
+        a.tread = tread
+        print("컨트롤러 wheel_separation %.5f m" % tread)
+    else:
+        print("컨트롤러에서 wheel_separation 을 못 읽었다. --tread %.5f 로 진행"
+              % a.tread)
 
     _, _, th0, j0 = n.snapshot()
     s = []
@@ -600,8 +643,13 @@ def cmd_fix(a):
     k = a.odom / a.actual
     print("odom %.1f mm, 실제 %.1f mm  ->  비율 %.4f" % (a.odom, a.actual, k))
     print("새 counts_per_rev = %.0f × %.4f = %.0f" % (a.cpr, k, a.cpr * k))
-    print("\nodom 이 실제보다 %s 보고하고 있었다."
-          % ("많이" if k > 1 else "적게"))
+
+    # 0.5% 안쪽이면 줄자 오차와 구분되지 않는다. 그걸 "틀렸다" 고 말하면
+    # 잡음을 쫓아 상수를 계속 흔들게 된다.
+    if abs(k - 1.0) < 0.005:
+        print("\n일치한다 (오차 %.2f%%). counts_per_rev 는 그대로 두면 된다." % ((k - 1) * 100))
+        return
+    print("\nodom 이 실제보다 %s 보고하고 있었다." % ("많이" if k > 1 else "적게"))
     print("jongky_description 의 <param name=\"counts_per_rev\"> 를 고칠 것.")
 
 
@@ -618,8 +666,9 @@ def main():
     p = sub.add_parser('spin', help='제자리 회전 — wheel_separation 검산')
     p.add_argument('--vz', type=float, default=1.0)
     p.add_argument('--turns', type=float, default=5.0)
-    p.add_argument('--tread', type=float, default=0.11625,
-                   help='현재 설정된 wheel_separation')
+    p.add_argument('--tread', type=float, default=0.11909,
+                   help='wheel_separation. 기본은 컨트롤러에서 읽고, '
+                        '못 읽을 때만 이 값을 쓴다')
 
     p = sub.add_parser('trace', help='주행 품질 진단')
     p.add_argument('--vx', type=float, default=0.2)
