@@ -1,0 +1,17 @@
+# 온보드 워크스페이스에 함께 두어야 하는 외부 소스.
+#
+#   cd ~/jongky_ws && vcs import src < src/jongky_magic/robot/jongky_robot.repos
+#
+# rplidar_ros
+#   apt 의 ros-jazzy-rplidar-ros 는 2.1.0 이고 SDK 1.12.0 을 쓴다. 우리 C1 은
+#   그 버전이 나온 뒤에 나온 모델이라 지원 목록에 없다 — 스캔 시작이
+#   RESULT_OPERATION_TIMEOUT(0x80008002) 로 실패한다. 자세한 건
+#   docs/troubleshooting.md 의 "RPLIDAR C1 이 Cannot start scan 으로 죽는다".
+#
+#   Slamtec 의 ros2 브랜치는 SDK 2.1.0 이고 rplidar_c1_launch.py 를 갖고 있다.
+#   버전이 갈리면 바로 재현되는 문제라 커밋을 고정한다.
+repositories:
+  rplidar_ros:
+    type: git
+    url: https://github.com/Slamtec/rplidar_ros.git
+    version: 24cc9b6dea97e045bda1408eaa867ce730fd3fc3   # ros2 브랜치, 2.1.4

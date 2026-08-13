@@ -17,10 +17,18 @@ ARG ROS_DISTRO=jazzy
 ENV ROS_DISTRO=${ROS_DISTRO}
 ENV DEBIAN_FRONTEND=noninteractive
 
-# ros2_control 스택과 로봇 모델 도구, 그리고 라이다 드라이버.
+# ros2_control 스택과 로봇 모델 도구.
+#
+# 라이다 드라이버는 여기에 없다. apt 의 ros-jazzy-rplidar-ros(2.1.0, SDK 1.12.0)
+# 는 우리 C1 을 모른다 — 스캔 시작이 타임아웃으로 실패한다. 소스로 받아
+# 워크스페이스에서 빌드한다: robot/jongky_robot.repos 참조.
+# 그 잘못된 버전이 오버레이 없이 잡히는 사고를 막으려고 아예 안 깐다.
+#
+# vcs import 를 쓰려면 python3-vcstool 이 필요하다.
+#
 # 아스트라(astra_camera)는 별도 검증 후 추가한다.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ros-${ROS_DISTRO}-rplidar-ros \
+      python3-vcstool \
       ros-${ROS_DISTRO}-ros2-control \
       ros-${ROS_DISTRO}-ros2-controllers \
       ros-${ROS_DISTRO}-controller-manager \
