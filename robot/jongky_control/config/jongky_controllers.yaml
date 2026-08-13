@@ -18,6 +18,20 @@ controller_manager:
     diff_drive_controller:
       type: diff_drive_controller/DiffDriveController
 
+    imu_sensor_broadcaster:
+      type: imu_sensor_broadcaster/IMUSensorBroadcaster
+
+
+imu_sensor_broadcaster:
+  ros__parameters:
+    sensor_name: imu_sensor
+    frame_id: imu_link
+    # 보드가 공분산을 안 주므로 0 으로 둔다. 센서 퓨전을 붙일 때
+    # 실측 잡음으로 채울 것.
+    static_covariance_orientation:         [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    static_covariance_angular_velocity:    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    static_covariance_linear_acceleration: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
 
 diff_drive_controller:
   ros__parameters:
@@ -34,8 +48,17 @@ diff_drive_controller:
     # 보정 계수. 위 값을 직접 고치는 대신 이쪽을 쓰면
     # description 과의 일치를 깨지 않고 실차 오차만 흡수할 수 있다.
     wheel_separation_multiplier:   1.0
-    left_wheel_radius_multiplier:  1.0
-    right_wheel_radius_multiplier: 1.0
+
+    # 좌우 타이어 반지름이 0.15mm(0.22%) 다르다. 엔코더는 각도만 재므로
+    # 이 차이를 전혀 못 본다 — odom 은 직진이라 하는데 로봇은 오른쪽으로
+    # 실린다. 자이로로 잰 실제 회전(-0.64도/초)과 odom 이 본 회전
+    # (-0.15도/초)의 차이에서 역산했다.
+    #
+    # 타이어가 닳거나 교체하면 다시 재야 한다:
+    #   jongky_calib.py trace --vx 0.2 --dur 10 --skip 7
+    #   "odom 이 놓친 회전" 이 0 에 가까워지면 맞은 것이다.
+    left_wheel_radius_multiplier:  1.0022
+    right_wheel_radius_multiplier: 0.9978
 
     # base_frame_id 기본값은 base_link 다. 종키는 base_footprint 가
     # 바닥 기준 루트이므로 반드시 바꿔야 한다. 안 바꾸면 odom 이

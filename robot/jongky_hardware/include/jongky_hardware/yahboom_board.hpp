@@ -31,7 +31,13 @@ struct BoardState
   std::array<double, 3> gyro{{0.0, 0.0, 0.0}};   ///< 보드 기준 rad/s
   std::array<double, 3> accel{{0.0, 0.0, 0.0}};
   std::array<double, 3> rpy{{0.0, 0.0, 0.0}};    ///< 보드가 계산한 자세
+  double pid_kp{-1.0}, pid_ki{-1.0}, pid_kd{-1.0};  ///< 보드가 보고한 게인
+  uint64_t pid_seq{0};                              ///< PID 응답 수신 횟수
   uint64_t encoder_seq{0};                       ///< 엔코더 프레임 수신 횟수
+  /// 엔코더 프레임이 실제로 도착한 시각(steady clock, ns).
+  /// 속도를 컨트롤러 주기로 나누면 25Hz 프레임이 50Hz 격자에 반올림되어
+  /// ±50% 오차가 생긴다. 도착 시각을 직접 써야 한다.
+  int64_t encoder_stamp_ns{0};
 };
 
 class YahboomBoard
@@ -60,6 +66,17 @@ public:
   /// 4채널 PWM 직접 구동. 진단용 — 보드 PID 를 우회한다.
   bool set_motor_pwm(int8_t m1, int8_t m2, int8_t m3, int8_t m4);
 
+  /// 보드 속도 PID 게인. 각 [0, 10]. 게인이 높으면 목표 근처에서 사냥한다.
+  /// persist=true 면 플래시에 쓴다 — 느리고 수명을 깎으므로 확정 후에만.
+  ///
+  /// [주의] ki 를 0 으로 두면 정상상태 오차를 못 없애 목표 속도에
+  /// 영영 도달하지 못한다. 반드시 읽어서 확인한 뒤 조정할 것.
+  bool set_motor_pid(double kp, double ki, double kd, bool persist = false);
+
+  /// 보드에 현재 PID 게인을 물어본다. 응답까지 최대 timeout_ms 기다린다.
+  /// 실패하면 false. 건드리기 전에 반드시 원래 값을 읽어둘 것.
+  bool get_motor_pid(double & kp, double & ki, double & kd, int timeout_ms = 500);
+
   /// 프레임을 한 번이라도 받았는지. 연결 직후 보드 생존 확인용.
   bool has_data() const { return rx_count_.load() > 0; }
 
@@ -78,6 +95,8 @@ private:
   static constexpr uint8_t kFuncAutoReport = 0x01;
   static constexpr uint8_t kFuncMotor = 0x10;
   static constexpr uint8_t kFuncMotion = 0x12;
+  static constexpr uint8_t kFuncSetMotorPid = 0x13;
+  static constexpr uint8_t kFuncRequestData = 0x50;
 
   // 수신 프레임 종류
   static constexpr uint8_t kRptSpeed = 0x0A;

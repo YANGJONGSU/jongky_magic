@@ -8,6 +8,7 @@
 
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "pluginlib/class_list_macros.hpp"
+#include "rcl_interfaces/msg/set_parameters_result.hpp"
 #include "rclcpp/rclcpp.hpp"
 
 namespace jongky_hardware
@@ -64,7 +65,12 @@ hardware_interface::CallbackReturn JongkySystemHardware::on_init(
   counts_per_rev_ = get_param(info_, "counts_per_rev", counts_per_rev_);
   wheel_radius_ = get_param(info_, "wheel_radius", wheel_radius_);
   wheel_separation_ = get_param(info_, "wheel_separation", wheel_separation_);
+  board_vel_scale_ = get_param(info_, "board_vel_scale", board_vel_scale_);
 
+  if (board_vel_scale_ <= 0.0) {
+    RCLCPP_ERROR(rclcpp::get_logger(kLogger), "board_vel_scale 은 양수여야 함");
+    return hardware_interface::CallbackReturn::ERROR;
+  }
   if (counts_per_rev_ <= 0.0 || wheel_radius_ <= 0.0 || wheel_separation_ <= 0.0) {
     RCLCPP_ERROR(
       rclcpp::get_logger(kLogger),
@@ -105,11 +111,16 @@ hardware_interface::CallbackReturn JongkySystemHardware::on_init(
     }
   }
 
+  if (!info_.sensors.empty()) {
+    imu_name_ = info_.sensors[0].name;
+  }
+
   RCLCPP_INFO(
     rclcpp::get_logger(kLogger),
-    "초기화 완료. port=%s baud=%d car_type=%u counts_per_rev=%.1f 좌='%s' 우='%s'",
-    serial_port_.c_str(), baud_rate_, car_type_, counts_per_rev_, left_joint_.c_str(),
-    right_joint_.c_str());
+    "초기화 완료. port=%s baud=%d car_type=%u counts_per_rev=%.1f "
+    "board_vel_scale=%.3f 좌='%s' 우='%s'",
+    serial_port_.c_str(), baud_rate_, car_type_, counts_per_rev_, board_vel_scale_,
+    left_joint_.c_str(), right_joint_.c_str());
 
   return hardware_interface::CallbackReturn::SUCCESS;
 }
@@ -133,6 +144,56 @@ hardware_interface::CallbackReturn JongkySystemHardware::on_configure(
       serial_port_.c_str());
     board_.close();
     return hardware_interface::CallbackReturn::ERROR;
+  }
+
+  // 건드리기 전에 보드의 원래 게인을 읽어 둔다. ki 를 0 으로 덮으면
+  // 정상상태 오차를 못 없애 목표 속도에 도달하지 못한다.
+  double bkp = -1.0, bki = -1.0, bkd = -1.0;
+  if (board_.get_motor_pid(bkp, bki, bkd)) {
+    RCLCPP_INFO(
+      rclcpp::get_logger(kLogger), "보드 기본 PID kp=%.3f ki=%.3f kd=%.3f", bkp, bki, bkd);
+    pid_kp_ = bkp;
+    pid_ki_ = bki;
+    pid_kd_ = bkd;
+  } else {
+    RCLCPP_WARN(rclcpp::get_logger(kLogger), "보드 PID 게인을 읽지 못했다");
+  }
+
+  // PID 게인을 ROS 파라미터로 노출한다. 음수면 보드 기본값을 건드리지 않는다.
+  //   ros2 param set /controller_manager jongky.motor_pid_kp 0.6
+  if (auto node = get_node()) {
+    const auto declare = [&](const char * name, double & slot) {
+      const std::string full = info_.name + "." + name;
+      if (!node->has_parameter(full)) {
+        slot = node->declare_parameter<double>(full, slot);
+      }
+    };
+    declare("motor_pid_kp", pid_kp_);
+    declare("motor_pid_ki", pid_ki_);
+    declare("motor_pid_kd", pid_kd_);
+
+    param_cb_ = node->add_on_set_parameters_callback(
+      [this](const std::vector<rclcpp::Parameter> & params) {
+        rcl_interfaces::msg::SetParametersResult res;
+        res.successful = true;
+        for (const auto & p : params) {
+          if (p.get_name() == info_.name + ".motor_pid_kp") { pid_kp_ = p.as_double(); }
+          else if (p.get_name() == info_.name + ".motor_pid_ki") { pid_ki_ = p.as_double(); }
+          else if (p.get_name() == info_.name + ".motor_pid_kd") { pid_kd_ = p.as_double(); }
+          else { continue; }
+        }
+        if (pid_kp_ >= 0.0 && pid_ki_ >= 0.0 && pid_kd_ >= 0.0) {
+          if (board_.set_motor_pid(pid_kp_, pid_ki_, pid_kd_, false)) {
+            RCLCPP_INFO(
+              rclcpp::get_logger(kLogger), "보드 PID 적용 kp=%.3f ki=%.3f kd=%.3f",
+              pid_kp_, pid_ki_, pid_kd_);
+          } else {
+            res.successful = false;
+            res.reason = "보드에 PID 전송 실패";
+          }
+        }
+        return res;
+      });
   }
 
   const auto s = board_.snapshot();
@@ -159,6 +220,16 @@ hardware_interface::CallbackReturn JongkySystemHardware::on_activate(
   left_cmd_handle_ = get_command_interface_handle(left_joint_ + "/velocity");
   right_cmd_handle_ = get_command_interface_handle(right_joint_ + "/velocity");
 
+  imu_handles_.clear();
+  if (!imu_name_.empty()) {
+    for (const auto * n : {"orientation.x", "orientation.y", "orientation.z", "orientation.w",
+                           "angular_velocity.x", "angular_velocity.y", "angular_velocity.z",
+                           "linear_acceleration.x", "linear_acceleration.y",
+                           "linear_acceleration.z"}) {
+      imu_handles_.push_back(get_state_interface_handle(imu_name_ + "/" + n));
+    }
+  }
+
   // 엔코더는 보드 부팅 이후 누적값이다. 활성화 시점을 원점으로 잡는다.
   const auto s = board_.snapshot();
   left_zero_ = s.encoder[kLeftEncoderIdx];
@@ -166,6 +237,12 @@ hardware_interface::CallbackReturn JongkySystemHardware::on_activate(
   zero_captured_ = true;
   left_pos_ = 0.0;
   right_pos_ = 0.0;
+  left_pos_at_seq_ = 0.0;
+  right_pos_at_seq_ = 0.0;
+  left_vel_ = 0.0;
+  right_vel_ = 0.0;
+  last_enc_seq_ = s.encoder_seq;
+  last_enc_stamp_ns_ = s.encoder_stamp_ns;
 
   set_state(left_pos_handle_, 0.0, false);
   set_state(right_pos_handle_, 0.0, false);
@@ -222,26 +299,57 @@ hardware_interface::return_type JongkySystemHardware::read(
     return hardware_interface::return_type::OK;
   }
 
-  const double prev_left = left_pos_;
-  const double prev_right = right_pos_;
-
   left_pos_ = counts_to_rad(s.encoder[kLeftEncoderIdx] - left_zero_);
   right_pos_ = counts_to_rad(s.encoder[kRightEncoderIdx] - right_zero_);
 
-  // 속도는 위치 차분으로 만든다. 보드가 주는 vx 는 차체 속도라
-  // 좌우로 나누려면 어차피 트레드를 다시 써야 하므로 이쪽이 직접적이다.
-  const double dt = period.seconds();
-  double left_vel = 0.0;
-  double right_vel = 0.0;
-  if (dt > 1e-6) {
-    left_vel = (left_pos_ - prev_left) / dt;
-    right_vel = (right_pos_ - prev_right) / dt;
+  // [중요] 속도는 엔코더 프레임이 갱신됐을 때만 다시 계산한다.
+  // 보드 보고는 25Hz, read() 는 50Hz 다. 매 주기 차분하면 절반은 변화 0,
+  // 절반은 2배가 되어 0 과 2배가 번갈아 나오는 사각파가 만들어진다.
+  // 실제로 이 버그 때문에 관절 속도의 변동이 평균의 1.6배로 찍혔다.
+  if (s.encoder_seq != last_enc_seq_) {
+    // dt 는 프레임 도착 시각의 차이로 잰다. 컨트롤러 주기를 누적하면
+    // 25Hz 프레임이 50Hz 격자에 반올림되어 속도가 ±50% 튄다.
+    const double dt = static_cast<double>(s.encoder_stamp_ns - last_enc_stamp_ns_) * 1e-9;
+    if (dt > 1e-4) {
+      left_vel_ = (left_pos_ - left_pos_at_seq_) / dt;
+      right_vel_ = (right_pos_ - right_pos_at_seq_) / dt;
+    }
+    left_pos_at_seq_ = left_pos_;
+    right_pos_at_seq_ = right_pos_;
+    last_enc_stamp_ns_ = s.encoder_stamp_ns;
+    last_enc_seq_ = s.encoder_seq;
   }
+  const double left_vel = left_vel_;
+  const double right_vel = right_vel_;
 
   set_state(left_pos_handle_, left_pos_, false);
   set_state(right_pos_handle_, right_pos_, false);
   set_state(left_vel_handle_, left_vel, false);
   set_state(right_vel_handle_, right_vel, false);
+
+  if (imu_handles_.size() == 10) {
+    // [부호] 보드 자이로 z 는 시계가 양수. REP-103 은 반시계가 양수이므로
+    // 뒤집는다. x·y 축 정렬은 아직 미검증이라 그대로 넘긴다.
+    const double gz = -s.gyro[2];
+
+    // 보드가 계산한 자세(roll/pitch/yaw)를 쿼터니언으로.
+    // yaw 도 자이로와 같은 이유로 부호를 뒤집는다.
+    const double roll = s.rpy[0], pitch = s.rpy[1], yaw = -s.rpy[2];
+    const double cr = std::cos(roll * 0.5), sr = std::sin(roll * 0.5);
+    const double cp = std::cos(pitch * 0.5), sp = std::sin(pitch * 0.5);
+    const double cy = std::cos(yaw * 0.5), sy = std::sin(yaw * 0.5);
+
+    const double vals[10] = {
+      sr * cp * cy - cr * sp * sy,   // orientation.x
+      cr * sp * cy + sr * cp * sy,   // orientation.y
+      cr * cp * sy - sr * sp * cy,   // orientation.z
+      cr * cp * cy + sr * sp * sy,   // orientation.w
+      s.gyro[0], s.gyro[1], gz,
+      s.accel[0], s.accel[1], s.accel[2]};
+    for (size_t i = 0; i < 10; ++i) {
+      set_state(imu_handles_[i], vals[i], false);
+    }
+  }
 
   return hardware_interface::return_type::OK;
 }
@@ -269,7 +377,10 @@ hardware_interface::return_type JongkySystemHardware::write(
 
   // [부호] 보드의 +vx 는 물리적 후진이므로 뒤집어 보낸다.
   //        +vz 는 반시계로 REP-103 과 일치하므로 그대로 보낸다.
-  if (!board_.set_motion(-vx, vz)) {
+  // [스케일] 보드는 자기 바퀴 크기로 vx·vz 를 각속도로 바꾼다. 그 가정이
+  //          우리 바퀴보다 커서 같은 값에 느리게 돈다. 비율만큼 키워 보낸다.
+  //          회전도 바퀴 속도로 만들어지므로 vz 에도 같이 적용한다.
+  if (!board_.set_motion(-vx * board_vel_scale_, vz * board_vel_scale_)) {
     RCLCPP_WARN_THROTTLE(
       rclcpp::get_logger(kLogger), *rclcpp::Clock::make_shared(), 1000,
       "모션 명령 전송 실패");

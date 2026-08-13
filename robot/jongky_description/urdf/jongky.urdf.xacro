@@ -334,10 +334,19 @@
           <param name="serial_port">${serial_port}</param>
           <param name="baud_rate">115200</param>
           <param name="car_type">1</param>
-          <!-- [미확정] 줄자 실측으로 확정할 것 -->
-          <param name="counts_per_rev">3182</param>
+          <!-- 실측 3회 중 기준점이 명확한 것을 채택.
+                 76cm 주행(odom 826.7mm, cpr 1788 설정) -> 1788 x 826.7/760 = 1945
+               14cm 주행에서 역산한 1973 과 1.4% 안에서 일치한다.
+               예전 3182 는 보드가 자기 내부 상수로 계산한 거리를 역산한
+               값이라 순환 논리였다. 보드는 X3 메카넘 차종용이라 바퀴 크기
+               가정이 우리와 다르다. -->
+          <param name="counts_per_rev">1945</param>
           <!-- 위 치수 상수를 그대로 넘긴다. 하드웨어 인터페이스가
                바퀴속도 -> 차체속도 역산에 쓰므로 URDF 와 어긋나면 안 된다 -->
+          <!-- 보드가 vx·vz 를 각속도로 바꿀 때 쓰는 바퀴 크기가 우리와
+               다르다. 실측 cmd 0.2 m/s -> 실제 0.144 m/s (0.719배) 이므로
+               그 역수를 곱해 보낸다. 보드 가정 반지름 약 46.6mm. -->
+          <param name="board_vel_scale">1.391</param>
           <param name="wheel_radius">${wheel_radius}</param>
           <param name="wheel_separation">${wheel_y*2}</param>
         </xacro:unless>
@@ -360,6 +369,25 @@
         <state_interface name="position"/>
         <state_interface name="velocity"/>
       </joint>
+
+      <!-- 야붐 보드 내장 IMU (ICM20948).
+           imu_sensor_broadcaster 가 이 인터페이스들을 읽어
+           sensor_msgs/Imu 로 발행한다. 이름은 규약 고정이라 바꾸면 안 된다.
+
+           [부호] 보드의 자이로 z 는 시계가 양수다. REP-103 은 반시계가
+           양수이므로 jongky_hardware 가 반전해서 채운다. -->
+      <sensor name="imu_sensor">
+        <state_interface name="orientation.x"/>
+        <state_interface name="orientation.y"/>
+        <state_interface name="orientation.z"/>
+        <state_interface name="orientation.w"/>
+        <state_interface name="angular_velocity.x"/>
+        <state_interface name="angular_velocity.y"/>
+        <state_interface name="angular_velocity.z"/>
+        <state_interface name="linear_acceleration.x"/>
+        <state_interface name="linear_acceleration.y"/>
+        <state_interface name="linear_acceleration.z"/>
+      </sensor>
     </ros2_control>
 
   </xacro:macro>

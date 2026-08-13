@@ -18,12 +18,14 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "hardware_interface/handle.hpp"
 #include "hardware_interface/system_interface.hpp"
 #include "hardware_interface/types/hardware_interface_return_values.hpp"
 #include "jongky_hardware/yahboom_board.hpp"
 #include "rclcpp/macros.hpp"
+#include "rclcpp/node.hpp"
 #include "rclcpp_lifecycle/state.hpp"
 
 namespace jongky_hardware
@@ -67,6 +69,13 @@ private:
   double wheel_radius_{0.0335};
   double wheel_separation_{0.11625};
 
+  // 보드는 vx·vz 를 자기 바퀴 크기로 각속도로 바꾼다. 그 가정이 우리
+  // 바퀴(반지름 33.5mm)와 달라서, 같은 vx 를 줘도 실제로는 느리게 돈다.
+  // 실측: cmd 0.2 m/s -> 바퀴 4.29 rad/s (원하는 값 5.97 의 0.719배).
+  // 보드 가정 반지름은 약 46.6mm 로 X3 메카넘 휠 크기다.
+  // 그 비율의 역수를 곱해서 보낸다.
+  double board_vel_scale_{1.391};
+
   // 관절 이름. URDF 의 <joint> 순서로 채운다.
   std::string left_joint_;
   std::string right_joint_;
@@ -84,6 +93,11 @@ private:
   hardware_interface::CommandInterface::SharedPtr left_cmd_handle_;
   hardware_interface::CommandInterface::SharedPtr right_cmd_handle_;
 
+  // IMU. imu_sensor_broadcaster 가 읽어 sensor_msgs/Imu 로 발행한다.
+  // 인터페이스 이름은 규약 고정 (orientation.x … linear_acceleration.z).
+  std::vector<hardware_interface::StateInterface::SharedPtr> imu_handles_;
+  std::string imu_name_;
+
   // 엔코더는 부팅 이후 누적값이라 활성화 시점을 0 으로 잡는다.
   int32_t left_zero_{0};
   int32_t right_zero_{0};
@@ -92,7 +106,24 @@ private:
   double left_pos_{0.0};
   double right_pos_{0.0};
 
+  // 속도는 엔코더 프레임이 실제로 갱신됐을 때만 다시 계산한다.
+  // 보드는 25Hz 로 보고하는데 read() 는 50Hz 로 돌기 때문에, 매 주기
+  // 차분하면 0 과 2배가 번갈아 나오는 사각파가 된다.
+  uint64_t last_enc_seq_{0};
+  int64_t last_enc_stamp_ns_{0};
+  double left_pos_at_seq_{0.0};
+  double right_pos_at_seq_{0.0};
+  double left_vel_{0.0};
+  double right_vel_{0.0};
+
   bool comms_warned_{false};
+
+  // 보드 속도 PID 게인. ROS 파라미터로 런타임에 바꿀 수 있다.
+  // 게인이 높으면 목표 근처에서 사냥해 바퀴 속도가 진동한다.
+  // 진단 도구가 이 파라미터를 바꿔가며 최적점을 찾는다.
+  //   ros2 param set /controller_manager jongky.motor_pid_kp 0.6
+  double pid_kp_{-1.0}, pid_ki_{-1.0}, pid_kd_{-1.0};
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_;
 };
 
 }  // namespace jongky_hardware

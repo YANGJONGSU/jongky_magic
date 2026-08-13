@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cerrno>
 #include <cstring>
+#include <thread>
 
 namespace jongky_hardware
 {
@@ -182,6 +183,49 @@ bool YahboomBoard::set_motor_pwm(int8_t m1, int8_t m2, int8_t m3, int8_t m4)
                  static_cast<uint8_t>(m3), static_cast<uint8_t>(m4)});
 }
 
+bool YahboomBoard::set_motor_pid(double kp, double ki, double kd, bool persist)
+{
+  const auto clamp = [](double v) { return v < 0.0 ? 0.0 : (v > 10.0 ? 10.0 : v); };
+  const auto put = [](double v, std::vector<uint8_t> & out) {
+    // 보드는 게인을 1000배 정수로 받는다 (Rosmaster_Lib 기준).
+    const uint16_t raw = static_cast<uint16_t>(v * 1000.0);
+    out.push_back(static_cast<uint8_t>(raw & 0xFF));
+    out.push_back(static_cast<uint8_t>((raw >> 8) & 0xFF));
+  };
+  std::vector<uint8_t> payload;
+  put(clamp(kp), payload);
+  put(clamp(ki), payload);
+  put(clamp(kd), payload);
+  payload.push_back(persist ? 0x5F : 0x00);
+  return write_frame(kFuncSetMotorPid, payload);
+}
+
+bool YahboomBoard::get_motor_pid(double & kp, double & ki, double & kd, int timeout_ms)
+{
+  uint64_t before;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    before = state_.pid_seq;
+  }
+  // FUNC_REQUEST_DATA 에 요청할 기능 코드와 파라미터(1)를 실어 보낸다.
+  if (!write_frame(kFuncRequestData, {kFuncSetMotorPid, 1})) {
+    return false;
+  }
+  for (int i = 0; i < timeout_ms; ++i) {
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      if (state_.pid_seq != before) {
+        kp = state_.pid_kp;
+        ki = state_.pid_ki;
+        kd = state_.pid_kd;
+        return true;
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  return false;
+}
+
 BoardState YahboomBoard::snapshot() const
 {
   std::lock_guard<std::mutex> lock(state_mutex_);
@@ -288,6 +332,7 @@ void YahboomBoard::parse_frame(uint8_t type, const std::vector<uint8_t> & d)
           state_.encoder[i] = le_i32(d, i * 4);
         }
         ++state_.encoder_seq;
+        state_.encoder_stamp_ns = now_ns();
       }
       break;
 
@@ -308,6 +353,16 @@ void YahboomBoard::parse_frame(uint8_t type, const std::vector<uint8_t> & d)
           state_.gyro[i] = le_i16(d, i * 2) / 1000.0;
           state_.accel[i] = le_i16(d, 6 + i * 2) / 1000.0;
         }
+      }
+      break;
+
+    case kFuncSetMotorPid:
+      // 응답: [pid_index(1)] [kp(2)] [ki(2)] [kd(2)], 각 게인은 1000배 정수
+      if (d.size() >= 7) {
+        state_.pid_kp = le_i16(d, 1) / 1000.0;
+        state_.pid_ki = le_i16(d, 3) / 1000.0;
+        state_.pid_kd = le_i16(d, 5) / 1000.0;
+        ++state_.pid_seq;
       }
       break;
 

@@ -10,6 +10,7 @@ set(THIS_PACKAGE_DEPS
   pluginlib
   rclcpp
   rclcpp_lifecycle
+  rcl_interfaces
 )
 
 find_package(ament_cmake REQUIRED)

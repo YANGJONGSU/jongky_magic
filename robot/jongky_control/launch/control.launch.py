@@ -71,6 +71,12 @@ def generate_launch_description():
         arguments=['diff_drive_controller', '-c', '/controller_manager'],
     )
 
+    imu_spawner = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=['imu_sensor_broadcaster', '-c', '/controller_manager'],
+    )
+
     rviz_node = Node(
         package='rviz2',
         executable='rviz2',
@@ -99,5 +105,7 @@ def generate_launch_description():
         RegisterEventHandler(
             OnProcessExit(target_action=jsb_spawner, on_exit=[diff_spawner])),
         RegisterEventHandler(
-            OnProcessExit(target_action=diff_spawner, on_exit=[rviz_node])),
+            OnProcessExit(target_action=diff_spawner, on_exit=[imu_spawner])),
+        RegisterEventHandler(
+            OnProcessExit(target_action=imu_spawner, on_exit=[rviz_node])),
     ])
