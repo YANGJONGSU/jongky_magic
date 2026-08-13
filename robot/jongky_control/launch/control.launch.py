@@ -16,7 +16,8 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, RegisterEventHandler
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
-from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import (
+    Command, EnvironmentVariable, LaunchConfiguration, PathJoinSubstitution)
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -65,16 +66,32 @@ def generate_launch_description():
         arguments=['joint_state_broadcaster', '-c', '/controller_manager'],
     )
 
+    # 컨트롤러는 controller_manager 프로세스 안에서 자기 노드를 만든다.
+    # 그래서 ros2_control_node 쪽에 remappings 를 걸어도 컨트롤러 토픽에는
+    # 적용되지 않는다. 스포너의 --controller-ros-args 로 넘겨야 한다.
+    #
+    # 기본 이름은 /diff_drive_controller/{cmd_vel,odom} 인데, Nav2·SLAM 과
+    # 대부분의 도구는 /cmd_vel 과 /odom 을 기대한다. 관례 이름으로 낸다.
     diff_spawner = Node(
         package='controller_manager',
         executable='spawner',
-        arguments=['diff_drive_controller', '-c', '/controller_manager'],
+        arguments=[
+            'diff_drive_controller', '-c', '/controller_manager',
+            '--controller-ros-args',
+            '-r /diff_drive_controller/cmd_vel:=/cmd_vel',
+            '--controller-ros-args',
+            '-r /diff_drive_controller/odom:=/odom',
+        ],
     )
 
     imu_spawner = Node(
         package='controller_manager',
         executable='spawner',
-        arguments=['imu_sensor_broadcaster', '-c', '/controller_manager'],
+        arguments=[
+            'imu_sensor_broadcaster', '-c', '/controller_manager',
+            '--controller-ros-args',
+            '-r /imu_sensor_broadcaster/imu:=/imu/data',
+        ],
     )
 
     rviz_node = Node(
@@ -92,9 +109,14 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'use_rviz', default_value='false',
             description='RViz 동시 실행'),
+        # udev 심링크는 컨테이너 안에 없다. run_robot.sh 가 호스트에서
+        # 실경로로 풀어 JONGKY_YAHBOOM_PORT 로 넘긴다.
         DeclareLaunchArgument(
-            'serial_port', default_value='/dev/yahboom',
-            description='야붐 보드 시리얼 포트. 가상 포트로 시험할 때 바꾼다'),
+            'serial_port',
+            default_value=EnvironmentVariable(
+                'JONGKY_YAHBOOM_PORT', default_value='/dev/yahboom'),
+            description='야붐 보드 포트. 기본값은 $JONGKY_YAHBOOM_PORT. '
+                        '가상 포트로 시험할 때 바꾼다'),
 
         control_node,
         rsp_node,

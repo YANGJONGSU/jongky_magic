@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>jongky_bringup</name>
+  <version>0.0.1</version>
+  <description>종키 AMR 진입점. 구동계와 센서를 런치 하나로 올린다</description>
+  <maintainer email="you@example.com">jongky</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>jongky_control</exec_depend>
+  <exec_depend>jongky_description</exec_depend>
+
+  <!-- 라이다. apt 판이 아니라 소스 빌드본이다 (robot/jongky_robot.repos).
+       apt 의 ros-jazzy-rplidar-ros 2.1.0 은 C1 을 모른다 -->
+  <exec_depend>rplidar_ros</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

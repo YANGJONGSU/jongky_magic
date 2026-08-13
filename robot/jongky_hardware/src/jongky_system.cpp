@@ -250,19 +250,25 @@ hardware_interface::CallbackReturn JongkySystemHardware::on_activate(
     }
   }
 
-  // 엔코더는 보드 부팅 이후 누적값이다. 활성화 시점을 원점으로 잡는다.
-  const auto s = board_.snapshot();
-  left_zero_ = s.encoder[kLeftEncoderIdx];
-  right_zero_ = s.encoder[kRightEncoderIdx];
-  zero_captured_ = true;
+  // 엔코더는 보드 부팅 이후 누적값이라 원점을 잡아야 한다. 다만 여기서
+  // 잡으면 안 된다 — on_configure 와 on_activate 사이는 1ms 도 안 되는데
+  // 보드 엔코더 보고는 25Hz(40ms) 다. 아직 프레임이 없어 snapshot 이
+  // 0 을 주고, 그걸 원점으로 삼으면 첫 프레임에서 "보드 켠 뒤 누적된 전량"
+  // 이 한 번에 관절 변화로 들어간다. 실제로 정지 상태의 로봇이 기동
+  // 직후 odom 상 0.6m·105도 이동한 것으로 찍혔다.
+  //
+  // 그래서 read() 에서 첫 엔코더 프레임이 올 때 잡는다. 그때까지는
+  // zero_captured_ 가 false 라 read() 가 상태를 건드리지 않고,
+  // 관절값은 아래에서 0 으로 둔 채 유지된다.
+  zero_captured_ = false;
   left_pos_ = 0.0;
   right_pos_ = 0.0;
   left_pos_at_seq_ = 0.0;
   right_pos_at_seq_ = 0.0;
   left_vel_ = 0.0;
   right_vel_ = 0.0;
-  last_enc_seq_ = s.encoder_seq;
-  last_enc_stamp_ns_ = s.encoder_stamp_ns;
+  last_enc_seq_ = 0;
+  last_enc_stamp_ns_ = 0;
 
   set_state(left_pos_handle_, 0.0, false);
   set_state(right_pos_handle_, 0.0, false);
@@ -274,7 +280,7 @@ hardware_interface::CallbackReturn JongkySystemHardware::on_activate(
   board_.set_motion(0.0, 0.0);
 
   RCLCPP_INFO(
-    rclcpp::get_logger(kLogger), "활성화. 엔코더 원점 좌=%d 우=%d", left_zero_, right_zero_);
+    rclcpp::get_logger(kLogger), "활성화. 엔코더 원점은 첫 프레임에서 잡는다");
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -315,7 +321,20 @@ hardware_interface::return_type JongkySystemHardware::read(
   comms_warned_ = false;
 
   const auto s = board_.snapshot();
+
+  // 첫 엔코더 프레임이 원점이다. encoder_seq 는 프레임 수신 횟수라
+  // 0 이면 아직 한 번도 안 왔다는 뜻이고, 그동안 encoder[] 는 의미가 없다.
   if (!zero_captured_) {
+    if (s.encoder_seq == 0) {
+      return hardware_interface::return_type::OK;
+    }
+    left_zero_ = s.encoder[kLeftEncoderIdx];
+    right_zero_ = s.encoder[kRightEncoderIdx];
+    last_enc_seq_ = s.encoder_seq;
+    last_enc_stamp_ns_ = s.encoder_stamp_ns;
+    zero_captured_ = true;
+    RCLCPP_INFO(
+      rclcpp::get_logger(kLogger), "엔코더 원점 좌=%d 우=%d", left_zero_, right_zero_);
     return hardware_interface::return_type::OK;
   }
 

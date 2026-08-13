@@ -16,6 +16,13 @@
 # --cap-add SYS_NICE
 #   없으면 controller_manager 가 FIFO 실시간 스케줄링을 못 잡는다.
 #   지금은 50Hz 가 잘 나오지만 부하가 늘면 주기 지터가 생긴다.
+#
+# --pid host 는 뺐다
+#   ROS 2 는 이게 필요 없다 (DDS 공유메모리는 /dev/shm 으로 충분하다).
+#   전 스택을 --pid host 없이 돌려서 확인했다.
+#   붙여 두면 컨테이너 안의 pkill 이 호스트 프로세스까지 본다. 실제로
+#   docker exec 로 pkill -f "ros2 launch" 를 돌렸다가 그 명령을 실어 나르던
+#   호스트 ssh 셸이 같이 죽었다 — 자기 cmdline 에 그 문자열이 들어 있었다.
 set -euo pipefail
 
 IMAGE="${JONGKY_IMAGE:-jongky:jazzy}"
@@ -46,7 +53,6 @@ exec docker run -it --rm \
   --network host \
   --ipc host \
   --cap-add SYS_NICE \
-  --pid host \
   -v "$WS:/ws" \
   -v /dev/shm:/dev/shm \
   "${DEVICE_ARGS[@]}" \

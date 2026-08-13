@@ -1,0 +1,28 @@
+# RPLIDAR C1 파라미터.
+#
+# 값은 Slamtec 의 rplidar_c1_launch.py 기본값과 같다. 우리가 확인한 것:
+#   460800 이어야 한다. 256000 은 S1 값이고 우리 장비는 C1 이다
+#   Standard 모드에서 5 kHz / 10 Hz / 최대 16 m 로 돈다
+#   실측 /scan — 10.01 Hz, 721 포인트, 유효 614개, 0.310~6.353 m
+#
+# frame_id 는 URDF 의 링크 이름과 반드시 같아야 한다. laser 의 yaw 는
+# 0 이다(실측 확정). 자세한 건 docs/troubleshooting.md 참조.
+rplidar_node:
+  ros__parameters:
+    channel_type: serial
+    serial_baudrate: 460800
+    frame_id: laser
+    scan_mode: Standard
+
+    # 스캔 방향을 뒤집지 않는다. 장착 방향은 URDF 의 laser_yaw_deg 로
+    # 표현한다 — 좌표 보정을 두 군데서 하면 나중에 반드시 헷갈린다
+    inverted: false
+    flip_x_axis: false
+
+    # 각도 간격을 균일하게 보간한다. Nav2·SLAM 이 이걸 기대한다
+    angle_compensate: true
+
+    # true 면 /scan 구독자가 없을 때 모터를 세운다. 전력과 베어링 수명에는
+    # 좋지만 구독이 붙는 순간 스핀업 지연이 생겨 첫 스캔이 비는 구간이 있다.
+    # 주행 중 예측 가능성을 택했다
+    auto_standby: false
