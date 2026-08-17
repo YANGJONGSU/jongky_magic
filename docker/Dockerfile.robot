@@ -38,6 +38,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ros-${ROS_DISTRO}-xacro \
       ros-${ROS_DISTRO}-robot-state-publisher \
       ros-${ROS_DISTRO}-tf2-tools \
+      ros-${ROS_DISTRO}-navigation2 \
+      ros-${ROS_DISTRO}-nav2-bringup \
+      ros-${ROS_DISTRO}-slam-toolbox \
       python3-colcon-common-extensions \
       build-essential \
     && rm -rf /var/lib/apt/lists/*
