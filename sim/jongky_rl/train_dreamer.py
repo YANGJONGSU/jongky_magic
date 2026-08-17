@@ -79,11 +79,46 @@ def build_config():
     cfg.envs = 1            # Isaac Sim 은 하나뿐이다
     cfg.parallel = False    # 서브프로세스는 거기서 또 Isaac Sim 을 만든다
     cfg.size = (64, 64)
+    # 에피소드 20초(600 스텝 @30Hz). dmc_vision 기본 500 스텝(16.7초)으로는
+    # 목표까지 못 간다 — check_reachable 참조. action_repeat 로 나뉘므로 곱해 둔다.
+    cfg.time_limit = 600 * cfg.action_repeat
     return cfg
+
+
+def check_reachable(cfg) -> None:
+    """에피소드 시간 안에 목표에 닿을 수 있는지 본다.
+
+    닿을 수 없으면 도달 보너스를 한 번도 못 받아 정책이 "도착" 을 못 배운다.
+    그런데 학습은 멀쩡히 도는 것처럼 보이므로, 몇 시간을 태우고 나서야
+    이상하다는 걸 알게 된다. 그래서 시작 전에 잰다.
+    """
+    from jongky_corridor_env import A_MAX, V_MAX, JongkyCorridorEnvCfg  # noqa: F401
+
+    env_cfg = JongkyCorridorEnvCfg()
+    dt = env_cfg.sim.dt * env_cfg.decimation           # env 한 스텝의 실제 시간
+    # dreamer 는 time_limit 을 action_repeat 로 나눈 뒤 쓴다 (main 에서 처리됨)
+    horizon_s = cfg.time_limit * dt
+    reach_m = V_MAX * horizon_s
+
+    start_max = 1.0                                     # _reset_idx 의 시작 x 상한
+    need_m = env_cfg.goal_x_range[1] - start_max        # 최악의 경우 거리
+
+    print(f"도달 검사: 에피소드 {horizon_s:.1f}초 · 최대주행 {reach_m:.1f}m · 최원거리 {need_m:.1f}m")
+    if need_m > reach_m:
+        raise SystemExit(
+            f"목표가 에피소드 시간 안에 닿지 않는다 ({need_m:.1f}m > {reach_m:.1f}m).\n"
+            f"  goal_x_range 를 줄이거나 --time_limit 을 {int(need_m / V_MAX / dt) + 200} 이상으로 줄 것."
+        )
+    if need_m > reach_m * 0.8:
+        print("  경고: 여유가 20% 미만이다. 회전·감속을 감안하면 빠듯하다")
 
 
 def main() -> None:
     cfg = build_config()
+    # dreamer.main 이 time_limit 을 action_repeat 로 나누므로 여기서도 맞춘다
+    cfg.time_limit //= cfg.action_repeat
+    check_reachable(cfg)
+    cfg.time_limit *= cfg.action_repeat
 
     # make_env 를 우리 것으로 바꾼다. dreamer.py 는 task 이름 앞자리로
     # 분기하는데 거기에 우리 env 가 없다.
