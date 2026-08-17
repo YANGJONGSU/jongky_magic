@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>jongky_guide</name>
+  <version>0.0.1</version>
+  <description>안내로봇 UI·음성·디스패치. 목적지를 받아 Nav2 로 데려간다</description>
+  <maintainer email="you@example.com">jongky</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav2_simple_commander</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+
+  <!-- 지도와 waypoint 가 있어야 안내가 성립한다 -->
+  <exec_depend>jongky_navigation</exec_depend>
+
+  <!-- 음성. 둘 다 선택적이다 — 없으면 그 기능만 건너뛰고 버튼 UI 는 돈다.
+       piper 와 whisper 는 apt 에 없으므로 별도 설치한다 (README 참조) -->
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>alsa-utils</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>종키 안내로봇</title>
+<style>
+  /* 7인치 터치스크린(보통 1024x600) 기준. 장갑 낀 손으로도 눌리게 크게 잡는다. */
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    font-family: system-ui, "Noto Sans KR", sans-serif;
+    background: #12151c; color: #f2f4f8;
+    user-select: none;
+  }
+  #app { height: 100%; display: flex; flex-direction: column; padding: 20px; gap: 16px; }
+
+  header { display: flex; align-items: baseline; gap: 12px; }
+  h1 { margin: 0; font-size: 30px; font-weight: 700; letter-spacing: -0.5px; }
+  .sub { font-size: 15px; color: #8b93a7; }
+
+  #message {
+    font-size: 26px; font-weight: 600; padding: 18px 22px; border-radius: 14px;
+    background: #1c212c; border-left: 6px solid #4b7bec; min-height: 76px;
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  }
+  #message.navigating { border-left-color: #f7b731; }
+  #message.arrived    { border-left-color: #26de81; }
+  #message.failed     { border-left-color: #fc5c65; }
+  #distance { font-size: 20px; color: #8b93a7; white-space: nowrap; }
+
+  #grid {
+    flex: 1; display: grid; gap: 14px; overflow-y: auto;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    grid-auto-rows: minmax(96px, auto);
+  }
+  button {
+    font-family: inherit; font-size: 26px; font-weight: 600; color: #f2f4f8;
+    background: #2a3140; border: 2px solid #3a4354; border-radius: 14px;
+    cursor: pointer; transition: transform .08s, background .15s;
+  }
+  button:active { transform: scale(.97); background: #4b7bec; }
+  button:disabled { opacity: .4; }
+
+  #cancel {
+    font-size: 24px; padding: 18px; background: #3d2229; border-color: #7a3742;
+    display: none;
+  }
+  #cancel.show { display: block; }
+
+  .empty { color: #8b93a7; font-size: 19px; line-height: 1.7; padding: 20px; }
+  code { background: #1c212c; padding: 3px 7px; border-radius: 5px; font-size: 16px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>어디로 가시나요?</h1>
+    <span class="sub">가고 싶은 곳을 눌러 주세요</span>
+  </header>
+
+  <div id="message">
+    <span id="message-text">목적지를 선택해 주세요</span>
+    <span id="distance"></span>
+  </div>
+
+  <div id="grid"></div>
+  <button id="cancel">안내 취소</button>
+</div>
+
+<script>
+const grid = document.getElementById('grid');
+const msgBox = document.getElementById('message');
+const msgText = document.getElementById('message-text');
+const distEl = document.getElementById('distance');
+const cancelBtn = document.getElementById('cancel');
+
+async function loadDestinations() {
+  const res = await fetch('/api/destinations');
+  const {destinations} = await res.json();
+
+  if (!destinations.length) {
+    grid.innerHTML = `<div class="empty">
+      등록된 목적지가 없습니다.<br><br>
+      맵핑 주행 중에 <code>teleop_key.py</code> 로 <code>w</code> 를 눌러
+      강의장 앞 위치를 먼저 기록해 주세요.
+    </div>`;
+    return;
+  }
+
+  grid.innerHTML = '';
+  for (const name of destinations) {
+    const btn = document.createElement('button');
+    btn.textContent = name;
+    btn.onclick = () => go(name);
+    grid.appendChild(btn);
+  }
+}
+
+async function go(destination) {
+  const res = await fetch('/api/go', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({destination}),
+  });
+  if (!res.ok) {
+    const {error} = await res.json();
+    msgText.textContent = error || '출발하지 못했습니다';
+  }
+}
+
+cancelBtn.onclick = () => fetch('/api/cancel', {method: 'POST'});
+
+// 상태 폴링. 도착·실패는 노드가 판정하므로 화면은 그대로 받아 그리기만 한다.
+async function poll() {
+  try {
+    const s = await (await fetch('/api/status')).json();
+    msgText.textContent = s.message;
+    msgBox.className = s.status;
+    distEl.textContent = s.status === 'navigating' && s.distance > 0
+      ? `${s.distance.toFixed(1)} m 남음` : '';
+    cancelBtn.classList.toggle('show', s.status === 'navigating');
+    document.querySelectorAll('#grid button')
+      .forEach(b => b.disabled = s.status === 'navigating');
+  } catch (e) { /* 노드 재시작 중일 수 있다. 다음 주기에 다시 시도한다 */ }
+}
+
+loadDestinations();
+setInterval(poll, 500);
+</script>
+</body>
+</html>
