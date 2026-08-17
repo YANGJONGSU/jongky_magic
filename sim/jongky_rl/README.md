@@ -1,8 +1,8 @@
 # jongky_rl — Isaac Lab 복도 주행 학습 환경
 
 종키프로 안내로봇의 주행 정책을 학습시키기 위한 Isaac Lab `DirectRLEnv`.
-DreamerV3 로 사전학습한 뒤 실물에서 파인튜닝하는 것이 목표다.
-학습 프레임워크는 아직 안 정해졌다 — 맨 아래 "DreamerV3 연결" 참조.
+DreamerV3(`NM512/dreamerv3-torch`) 로 사전학습한 뒤 실물에서 파인튜닝하는 것이
+목표다.
 
 ROS 패키지가 아니다. Isaac Lab venv 에서 직접 돌린다.
 
@@ -14,8 +14,8 @@ tools/smoke_env.py         환경 인스턴스화 + 몇 스텝 굴려보기
 tools/diag_drive.py        구동 진단. 램프·기구학을 우회하고 바퀴에 속도를 직접 꽂는다
 tools/check_merged.py      USD 질량 합 · 센서 프레임 생존 확인
 tools/inspect_collisions.py  충돌 prim 구조 훑기
-rllib_wrapper.py           RLlib 다리 (미동작 — 아래 참조)
-train_dreamer.py           DreamerV3 학습 (미동작 — 아래 참조)
+dreamer_env.py             dreamerv3-torch 어댑터
+train_dreamer.py           DreamerV3 학습 진입점
 ```
 
 ## 사전 준비 — URDF → USD
@@ -151,26 +151,53 @@ implicit actuator 에서 **그냥 무시된다.** `*_sim` 접미사를 쓸 것.
 - **복도 폭** — 지금 2.4 m. 현장 실측으로 교체
 - **환경 기하** — SLAM 지도에서 복도를 뽑아오면 실제 건물과 맞출 수 있다
 
-## DreamerV3 연결 — RLlib 은 막혀 있다
+## DreamerV3 연결 — dreamerv3-torch 를 쓴다
 
-`rllib_wrapper.py` · `train_dreamer.py` 는 **동작하지 않는다.** 기록으로 남겨 둔다.
+**RLlib 은 못 쓴다.** 신 API 스택의 `SingleAgentEnvRunner` 가 `gym.make_vec()`
+으로 **스스로 벡터화를 하는데**, Isaac Sim 은 한 프로세스에 하나만 뜨므로
+env 생성을 넘겨줄 수가 없다.
 
 ```
 TypeError: The environment must inherit from the gymnasium.Env class,
 actual class: IsaacLabRLlibVecEnv
 ```
 
-RLlib 신 API 스택의 `SingleAgentEnvRunner` 는 `gym.make_vec()` 으로 **자기가
-벡터화를 한다.** 이미 벡터화된 env 를 받아 주지 않는다. 그런데 **Isaac Sim 은
-한 프로세스에 하나만 뜨므로** env 생성을 RLlib 에 맡길 수가 없다.
+대신 `NM512/dreamerv3-torch` 를 쓴다 (계획서가 원래 후보로 적어 둔 것).
+env 를 그냥 받아 쓰므로 이 마찰이 없다.
 
-남은 길은 셋이다.
+```bash
+git clone --depth 1 https://github.com/NM512/dreamerv3-torch.git ~/dreamerv3-torch
 
-| | |
-|---|---|
-| `num_envs=1` 로 단일 env | 즉시 되지만 GPU 병렬성을 버린다. DayDreamer 도 실물 1대였으니 동작은 한다 |
-| 커스텀 EnvRunner | `make_env` 만 갈아끼운다. 병렬성은 지키지만 RLlib 내부에 의존한다 |
-| **`dreamerv3-torch` 로 교체** | gym env 를 직접 받는다. 계획서가 원래 후보로 적어 둔 것 |
+cd sim/jongky_rl
+OMNI_KIT_ACCEPT_EULA=YES ~/isaac/env_isaaclab/bin/python -u train_dreamer.py \
+    --headless --enable_cameras --steps 50000
+```
 
-RLlib DreamerV3 는 Atari/DMC 벤치마크용이라 외부 시뮬레이터를 물리는 경로가
-닦여 있지 않다. 세 번째가 마찰이 가장 적을 것으로 본다.
+> **`requirements.txt` 를 그대로 깔지 말 것.** `torch==2.4.1` 핀이 Isaac Lab 의
+> 2.7.0 을 깨뜨린다. 실제로 모자란 건 `ruamel.yaml` 하나뿐이다.
+
+### 어댑터가 맞춰야 하는 것들
+
+**구 gym API 다.** gymnasium 이 아니다 — `reset() -> obs`, `step() -> 4-튜플`.
+obs 는 `image`(uint8 0~255) · `is_first` · `is_terminal` 을 가진 dict.
+
+**`is_terminal` 은 진짜 종료만 참이다.** 시간초과(truncated)는 거짓이어야 한다.
+시간이 다 됐다고 그 상태의 가치가 0 인 것은 아니다 — 뭉뚱그리면 크리틱이
+에피소드 끝을 전부 실패로 배운다.
+
+**정규화를 두 번 하면 안 된다.** dreamerv3-torch 가 내부에서 한다. env 의
+`normalize_obs` 를 False 로 두고 uint8 을 그대로 넘긴다.
+
+**env 는 싱글턴이다.** `dreamer.py` 는 train_envs 와 eval_envs 를 따로 만드는데
+Isaac Sim 은 두 번째 생성에서 죽는다. 같은 인스턴스를 돌려준다.
+
+**`envs=1`, `parallel=False`.** 서브프로세스를 띄우면 거기서 또 Isaac Sim 을
+만든다. GPU 병렬성을 버리는 셈이지만 DreamerV3 는 sample-efficient 설계이고
+DayDreamer 도 실물 1대로 학습했다.
+
+### 검증 결과
+
+1200 스텝 스모크 테스트에서 월드모델·액터·크리틱 손실이 모두 갱신되고
+에피소드가 쌓이는 것을 확인했다 (`model_loss` 682 / `image_loss` 675 /
+`actor_loss` 0.1 / `value_loss` 9.2, 7 에피소드). 학습 곡선을 논하기엔
+이르지만 파이프라인은 뚫렸다.

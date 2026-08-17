@@ -1,102 +1,107 @@
-"""DreamerV3 로 종키 복도 주행 정책을 학습한다.
+"""dreamerv3-torch(NM512) 로 종키 복도 주행 정책을 학습한다.
 
     cd sim/jongky_rl
     OMNI_KIT_ACCEPT_EULA=YES ~/isaac/env_isaaclab/bin/python -u train_dreamer.py \
-        --headless --enable_cameras --num-envs 8 --iters 100
+        --headless --enable_cameras --steps 50000
 
-[왜 num_env_runners=0 인가]
-Isaac Sim 은 한 프로세스에 하나만 뜬다. RLlib 이 env 를 여러 프로세스로
-띄우려 하면 거기서 죽는다. 대신 Isaac Lab 이 GPU 안에서 num_envs 개를
-병렬로 돌리므로 병렬성은 이미 확보돼 있다.
+dreamerv3-torch 를 먼저 받아 둘 것 (기본 경로 ~/dreamerv3-torch):
 
-[env 개수]
-DreamerV3 는 sample-efficient 설계라 env 를 많이 안 띄운다. Isaac Lab 예제는
-PPO 용이라 수천 개지만 여기서는 4~16 이면 충분하고, 카메라 렌더링 VRAM 도
-16GB 에 그 정도까지만 들어간다.
+    git clone --depth 1 https://github.com/NM512/dreamerv3-torch.git
 
-[모델 크기]
-model_size 는 XS 부터 시작할 것. 관측이 64x64 RGB 한 장이고 행동이 2차원인
-단순한 과제라 큰 모델이 필요 없고, 실물에 올릴 액터도 작아야 한다.
+requirements.txt 를 그대로 깔면 안 된다 — torch==2.4.1 핀이 Isaac Lab 의
+2.7.0 을 깨뜨린다. 실제로 모자란 건 ruamel.yaml 하나다.
+
+[RLlib 이 아닌 이유]
+RLlib 신 API 스택은 gym.make_vec() 으로 스스로 벡터화를 하는데 Isaac Sim 은
+한 프로세스에 하나만 뜨므로 env 생성을 넘겨줄 수가 없다. dreamerv3-torch 는
+env 를 그냥 받아 쓴다. 자세한 경위는 README "DreamerV3 연결".
+
+[강제되는 설정]
+  envs=1      Isaac Sim 이 하나뿐이다
+  parallel=False  서브프로세스를 띄우면 거기서 또 Isaac Sim 을 만든다
 """
 
 from __future__ import annotations
 
 import argparse
+import os
+import pathlib
+import sys
 
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-parser.add_argument("--num-envs", type=int, default=8)
-parser.add_argument("--iters", type=int, default=100)
-parser.add_argument("--model-size", type=str, default="XS", help="XS/S/M/L/XL")
-parser.add_argument("--checkpoint-dir", type=str, default="~/jongky_rl_runs")
+parser.add_argument("--dreamer-repo", default="~/dreamerv3-torch")
+parser.add_argument("--logdir", default="~/jongky_dreamer_runs/corridor")
+parser.add_argument("--steps", type=int, default=50000, help="환경 스텝 수")
+parser.add_argument("--config", default="dmc_vision", help="configs.yaml 의 프리셋")
 AppLauncher.add_app_launcher_args(parser)
-args = parser.parse_args()
+args, remaining = parser.parse_known_args()
 
-# 시뮬레이터를 먼저 띄운다. isaaclab 임포트가 이 뒤여야 한다.
+# 시뮬레이터를 먼저 띄운다. isaaclab 관련 임포트는 이 뒤여야 한다.
 simulation_app = AppLauncher(args).app
 
-import os  # noqa: E402
+REPO = pathlib.Path(os.path.expanduser(args.dreamer_repo))
+if not REPO.exists():
+    raise SystemExit(f"dreamerv3-torch 가 없다: {REPO}\n  git clone https://github.com/NM512/dreamerv3-torch.git")
+sys.path.insert(0, str(REPO))
 
-import ray  # noqa: E402
-from ray.rllib.algorithms.dreamerv3 import DreamerV3Config  # noqa: E402
-from ray.tune.registry import register_env  # noqa: E402
+import ruamel.yaml as yaml  # noqa: E402
 
-from jongky_corridor_env import JongkyCorridorEnv, JongkyCorridorEnvCfg  # noqa: E402
-from rllib_wrapper import IsaacLabRLlibVecEnv  # noqa: E402
+import dreamer as dreamer_main  # noqa: E402  (dreamerv3-torch 의 dreamer.py)
+import tools as dreamer_tools  # noqa: E402
 
-# Isaac Sim 인스턴스는 하나뿐이므로 env 도 하나만 만들어 재사용한다.
-_ENV = None
+from dreamer_env import get_env  # noqa: E402
 
 
-def make_env(_cfg=None):
-    global _ENV
-    if _ENV is None:
-        cfg = JongkyCorridorEnvCfg()
-        cfg.scene.num_envs = args.num_envs
-        _ENV = IsaacLabRLlibVecEnv(JongkyCorridorEnv(cfg))
-    return _ENV
+def build_config():
+    """configs.yaml 을 읽고 종키에 맞게 덮어쓴다."""
+    configs = yaml.YAML(typ="safe").load((REPO / "configs.yaml").read_text())
+
+    merged = {}
+    for name in ("defaults", args.config):
+        for k, v in configs[name].items():
+            if isinstance(v, dict) and k in merged:
+                merged[k].update(v)
+            else:
+                merged[k] = v
+
+    # 남은 CLI 인자를 configs.yaml 키로 받는다 (--batch_size 같은 것)
+    p = argparse.ArgumentParser()
+    for k, v in sorted(merged.items()):
+        t = dreamer_tools.args_type(v)
+        p.add_argument(f"--{k}", type=t, default=t(v))
+    cfg = p.parse_args(remaining)
+
+    cfg.task = "jongky_corridor"
+    cfg.logdir = os.path.expanduser(args.logdir)
+    cfg.steps = args.steps
+    cfg.envs = 1            # Isaac Sim 은 하나뿐이다
+    cfg.parallel = False    # 서브프로세스는 거기서 또 Isaac Sim 을 만든다
+    cfg.size = (64, 64)
+    return cfg
 
 
 def main() -> None:
-    ray.init(local_mode=True, ignore_reinit_error=True)
-    register_env("jongky_corridor", make_env)
+    cfg = build_config()
 
-    config = (
-        DreamerV3Config()
-        .environment(env="jongky_corridor")
-        .framework("torch")
-        # env 를 RLlib 이 만들지 않게 한다 — Isaac Sim 은 이 프로세스에만 있다.
-        .env_runners(num_env_runners=0, num_envs_per_env_runner=args.num_envs)
-        .learners(num_learners=0)
-        .training(
-            model_size=args.model_size,
-            training_ratio=512,
-            batch_size_B=16,
-            batch_length_T=64,
-        )
-    )
+    # make_env 를 우리 것으로 바꾼다. dreamer.py 는 task 이름 앞자리로
+    # 분기하는데 거기에 우리 env 가 없다.
+    def make_env(config, mode, id):
+        import envs.wrappers as wrappers
 
-    algo = config.build_algo()
-    ckpt_dir = os.path.expanduser(args.checkpoint_dir)
-    os.makedirs(ckpt_dir, exist_ok=True)
+        env = get_env(size=tuple(config.size))
+        env = wrappers.TimeLimit(env, config.time_limit)
+        env = wrappers.SelectAction(env, key="action")
+        env = wrappers.UUID(env)
+        return env
 
-    for i in range(args.iters):
-        result = algo.train()
-        env_steps = result.get("num_env_steps_sampled_lifetime", 0)
-        reward = (
-            result.get("env_runners", {})
-            .get("episode_return_mean")
-        )
-        print(f"[{i + 1}/{args.iters}] steps={env_steps} return={reward}")
+    dreamer_main.make_env = make_env
 
-        # 중간에 죽어도 이어갈 수 있게 주기적으로 남긴다.
-        if (i + 1) % 10 == 0:
-            path = algo.save(ckpt_dir)
-            print(f"  체크포인트: {path}")
-
-    algo.save(ckpt_dir)
-    algo.stop()
+    print(f"logdir : {cfg.logdir}")
+    print(f"steps  : {cfg.steps}")
+    print(f"프리셋 : {args.config}")
+    dreamer_main.main(cfg)
     simulation_app.close()
 
 

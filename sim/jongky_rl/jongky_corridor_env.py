@@ -167,6 +167,11 @@ class JongkyCorridorEnvCfg(DirectRLEnvCfg):
     # ── 공간 ───────────────────────────────────────────────────────────────
     action_space = 2                                   # [v, omega], 각각 [-1, 1]
     observation_space = [64, 64, 3]                    # DreamerV3 표준
+
+    # 관측 정규화를 여기서 할지 학습 쪽에 맡길지.
+    # dreamerv3-torch 는 uint8 0~255 이미지를 받아 내부에서 정규화하므로
+    # 그쪽에 붙일 때는 False 로 둔다 (dreamer_env.py 가 알아서 끈다).
+    normalize_obs = True
     state_space = 5                                    # 크리틱/디버그용 (목표거리, sin/cos 방위, v, omega)
 
     # ── 씬 ─────────────────────────────────────────────────────────────────
@@ -295,8 +300,10 @@ class JongkyCorridorEnv(DirectRLEnv):
 
     # ── 관측 ───────────────────────────────────────────────────────────────
     def _get_observations(self) -> dict:
-        rgb = self._camera.data.output["rgb"] / 255.0
-        rgb = rgb - torch.mean(rgb, dim=(1, 2), keepdim=True)  # 채널별 평균 제거
+        rgb = self._camera.data.output["rgb"]
+        if self.cfg.normalize_obs:
+            rgb = rgb / 255.0
+            rgb = rgb - torch.mean(rgb, dim=(1, 2), keepdim=True)  # 채널별 평균 제거
         return {"policy": rgb.clone(), "critic": self._compute_state()}
 
     def _compute_state(self) -> torch.Tensor:
