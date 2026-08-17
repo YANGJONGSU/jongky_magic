@@ -26,7 +26,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 #
 # vcs import 를 쓰려면 python3-vcstool 이 필요하다.
 #
-# 아스트라는 orbbec_camera 로 붙인다. astra_camera 는 Jazzy 에 deb 이 없다.
+# 아스트라는 openni2_camera + 오르베 재배포 OpenNI2 로 붙인다.
+# apt 판 orbbec_camera(SDK v2)로는 안 된다 — 아래 RUN 주석 참조.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3-vcstool \
       ros-${ROS_DISTRO}-ros2-control \
@@ -41,10 +42,43 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ros-${ROS_DISTRO}-navigation2 \
       ros-${ROS_DISTRO}-nav2-bringup \
       ros-${ROS_DISTRO}-slam-toolbox \
-      ros-${ROS_DISTRO}-orbbec-camera \
+      ros-${ROS_DISTRO}-openni2-camera \
       python3-colcon-common-extensions \
       build-essential \
+      git \
     && rm -rf /var/lib/apt/lists/*
+
+# ── 아스트라(Orbbec Astra, USB 2bc5:0401) ────────────────────────────────────
+#
+# 우리 카메라를 여는 조합을 찾기까지 세 갈래를 다 밟았다.
+#
+#   ros-jazzy-orbbec-camera (OrbbecSDK v2.7.6)
+#       PID 0401 을 지원 목록에 안 갖고 있다. SDK 가 아는 PID 는
+#       0x06xx / 0x08xx / 0x0Axx 대역뿐이라 이 장치는 열거 후보에서 아예 빠진다.
+#       그래서 노드는 뜨는데 에러 한 줄 없이 /camera/device_status 만 나온다.
+#
+#   openni2_camera + 배포판 PS1080 드라이버
+#       PS1080 은 PrimeSense VID 만 안다. "Found 0 devices".
+#
+#   openni2_camera + 오르베 재배포 OpenNI2      ← 이게 답이다
+#       오르베가 자기 VID(0x2bc5)를 넣어 빌드한 OpenNI2 계층으로 갈아끼운다.
+#       ROS 노드(openni2_camera)는 apt 판 그대로 쓴다.
+#
+# liborbbec.so 만 복사하면 안 된다. 같은 디렉터리의 orbbec.ini 를 읽고,
+# libOpenNI2 본체도 오르베 빌드여야 한다.
+#
+# LD_LIBRARY_PATH 로는 안 된다 — 런치가 컴포넌트 컨테이너를 별도 프로세스로
+# 띄우면서 환경이 유실된다. 시스템 libOpenNI2.so.0 을 직접 덮어써야 한다.
+#
+# 확인: ros2 run openni2_camera list_devices 가 장치 Uri 와 시리얼을 뱉으면 성공.
+ARG ASTRA_REPO=https://github.com/orbbec/ros2_astra_camera.git
+RUN git clone --depth 1 ${ASTRA_REPO} /tmp/astra_src \
+    && ARCH_DIR=/tmp/astra_src/astra_camera/openni2_redist/$(uname -m | sed 's/aarch64/arm64/; s/x86_64/x64/') \
+    && LIB_DIR=/lib/$(uname -m)-linux-gnu \
+    && cp ${ARCH_DIR}/libOpenNI2.so ${LIB_DIR}/libOpenNI2.so.0 \
+    && cp ${ARCH_DIR}/OpenNI2/Drivers/* /usr/lib/$(uname -m)-linux-gnu/OpenNI2/Drivers/ \
+    && cp ${ARCH_DIR}/OpenNI.ini ${LIB_DIR}/ \
+    && rm -rf /tmp/astra_src
 
 # 워크스페이스는 실행 시 볼륨으로 마운트한다. 이미지에 굽지 않는 이유는
 # 소스를 고칠 때마다 이미지를 다시 만들지 않기 위해서다.

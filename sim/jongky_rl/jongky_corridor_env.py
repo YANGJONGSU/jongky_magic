@@ -24,7 +24,7 @@ import torch
 
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
-from isaaclab.assets import Articulation, ArticulationCfg
+from isaaclab.assets import Articulation, ArticulationCfg, RigidObject, RigidObjectCfg
 from isaaclab.envs import DirectRLEnv, DirectRLEnvCfg, ViewerCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import TiledCamera, TiledCameraCfg
@@ -68,6 +68,21 @@ class JongkyCorridorEnvCfg(DirectRLEnvCfg):
     # ── 로봇 ───────────────────────────────────────────────────────────────
     # 바퀴는 속도 제어. USD 변환 때 stiffness 0 / damping 100 으로 넣어 뒀고
     # 여기서 한 번 더 명시한다.
+    # 목표 마커 (설정값은 아래 "목표 마커" 절 참조).
+    # 충돌 프로퍼티를 안 주므로 순수 시각 물체이고, kinematic 이라 물리에 안 밀린다.
+    marker_cfg: RigidObjectCfg = RigidObjectCfg(
+        prim_path="/World/envs/env_.*/GoalMarker",
+        spawn=sim_utils.CylinderCfg(
+            radius=0.15,
+            height=1.60,
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
+            visual_material=sim_utils.PreviewSurfaceCfg(
+                diffuse_color=(0.95, 0.35, 0.05), emissive_color=(0.30, 0.10, 0.0)
+            ),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(10.0, 0.0, 0.80)),
+    )
+
     robot_cfg: ArticulationCfg = ArticulationCfg(
         prim_path="/World/envs/env_.*/Robot",
         spawn=sim_utils.UsdFileCfg(
@@ -170,6 +185,17 @@ class JongkyCorridorEnvCfg(DirectRLEnvCfg):
     goal_y_range = (-0.6, 0.6)
     goal_radius = 0.35          # 도달 판정. MARS warehouse_env 와 같은 값
 
+    # ── 목표 마커 ──────────────────────────────────────────────────────────
+    # 관측이 픽셀뿐이라 목표가 화면에 보이지 않으면 정책이 복도 직진밖에 못 배운다.
+    # 실제 시나리오에서 강의장 문·표지판이 하는 역할을 시뮬에서 대신한다.
+    #
+    # 충돌을 끄고 kinematic 으로 둔다 — 로봇이 밀거나 부딪혀 넘어뜨리면
+    # 안 되고, 도달 판정은 어차피 거리로 한다.
+    #
+    # 크기·색은 위 marker_cfg 의 spawn 에 있다. 여기 높이는 리셋 때 마커를
+    # 바닥에 세우는 계산에만 쓰므로 marker_cfg 의 height 와 같이 바꿀 것.
+    marker_height = 1.60        # 64x64 화면에서 멀리서도 보이도록 문 높이쯤
+
     # ── 보상 계수 ──────────────────────────────────────────────────────────
     rew_progress = 10.0         # 목표까지 거리 감소분에 곱함 (주 신호)
     rew_goal = 50.0             # 도달 보너스
@@ -199,6 +225,7 @@ class JongkyCorridorEnv(DirectRLEnv):
     def _setup_scene(self):
         self._robot = Articulation(self.cfg.robot_cfg)
         self._camera = TiledCamera(self.cfg.tiled_camera)
+        self._marker = RigidObject(self.cfg.marker_cfg)
 
         # 바닥
         ground = sim_utils.GroundPlaneCfg(
@@ -230,6 +257,7 @@ class JongkyCorridorEnv(DirectRLEnv):
 
         self.scene.articulations["robot"] = self._robot
         self.scene.sensors["front_cam"] = self._camera
+        self.scene.rigid_objects["goal_marker"] = self._marker
 
         light_cfg = sim_utils.DomeLightCfg(intensity=2500.0, color=(0.9, 0.9, 0.88))
         light_cfg.func("/World/Light", light_cfg)
@@ -339,6 +367,17 @@ class JongkyCorridorEnv(DirectRLEnv):
 
         self._goal[env_ids, 0] = sample_uniform(*self.cfg.goal_x_range, (n,), self.device)
         self._goal[env_ids, 1] = sample_uniform(*self.cfg.goal_y_range, (n,), self.device)
+
+        # 목표 마커를 새 목표 위치로 옮긴다. 이게 있어야 정책이 픽셀만 보고도
+        # 어디로 가야 하는지 알 수 있다.
+        mk = self._marker.data.default_root_state[env_ids].clone()
+        mk[:, 0] = self._goal[env_ids, 0]
+        mk[:, 1] = self._goal[env_ids, 1]
+        mk[:, 2] = self.cfg.marker_height * 0.5
+        mk[:, :3] += self.scene.env_origins[env_ids]
+        self._marker.write_root_pose_to_sim(mk[:, :7], env_ids)
+        self._marker.write_root_velocity_to_sim(torch.zeros(n, 6, device=self.device), env_ids)
+
         self._prev_dist[env_ids] = torch.norm(
             self._goal[env_ids] - (root[:, :2] - self.scene.env_origins[env_ids, :2]), dim=-1
         )
