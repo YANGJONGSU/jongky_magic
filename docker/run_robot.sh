@@ -27,6 +27,9 @@ set -euo pipefail
 
 IMAGE="${JONGKY_IMAGE:-jongky:jazzy}"
 WS="${JONGKY_WS:-$HOME/jongky_ws}"
+# piper 음성 모델. 이미지에 굽지 않고 마운트한다 — 모델마다 라이선스가 다르고
+# 교체 가능해야 한다. 컨테이너 안에서는 /voices 로 보인다.
+VOICES="${JONGKY_VOICES:-$HOME/voices}"
 
 DEVICE_ARGS=()
 ENV_ARGS=()
@@ -49,6 +52,17 @@ add_device /dev/rplidar JONGKY_LIDAR_PORT
 
 mkdir -p "$WS/src"
 
+# 오디오. 스피커·마이크가 USB 사운드카드라 /dev/snd 가 있어야 aplay/arecord 가 뜬다.
+AUDIO_ARGS=()
+if [ -d /dev/snd ]; then
+  AUDIO_ARGS+=(--device /dev/snd)
+else
+  echo "경고: /dev/snd 없음. 음성 안내와 인식이 동작하지 않는다" >&2
+fi
+if [ -d "$VOICES" ]; then
+  AUDIO_ARGS+=(-v "$VOICES:/voices:ro")
+fi
+
 exec docker run -it --rm \
   --network host \
   --ipc host \
@@ -56,6 +70,7 @@ exec docker run -it --rm \
   -v "$WS:/ws" \
   -v /dev/shm:/dev/shm \
   -v /dev/bus/usb:/dev/bus/usb \
+  "${AUDIO_ARGS[@]}" \
   "${DEVICE_ARGS[@]}" \
   "${ENV_ARGS[@]}" \
   -e ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}" \

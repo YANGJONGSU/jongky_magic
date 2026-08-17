@@ -46,6 +46,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       python3-colcon-common-extensions \
       build-essential \
       git \
+      alsa-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # ── 아스트라(Orbbec Astra, USB 2bc5:0401) ────────────────────────────────────
@@ -79,6 +80,24 @@ RUN git clone --depth 1 ${ASTRA_REPO} /tmp/astra_src \
     && cp ${ARCH_DIR}/OpenNI2/Drivers/* /usr/lib/$(uname -m)-linux-gnu/OpenNI2/Drivers/ \
     && cp ${ARCH_DIR}/OpenNI.ini ${LIB_DIR}/ \
     && rm -rf /tmp/astra_src
+
+# ── 안내 음성 (jongky_guide) ────────────────────────────────────────────────
+#
+# piper  : 오프라인 한국어 TTS. 층별 서브넷이 격리돼 있어 클라우드 TTS 는
+#          층을 넘는 순간 끊긴다. 음성 모델(.onnx)은 여기 굽지 않는다 —
+#          라이선스가 모델마다 다르고 교체 가능해야 해서 --voice 로 준다.
+# whisper: STT. torch 는 이미 이미지에 있으므로 재설치 없이 얹힌다.
+#
+# --index-url 을 반드시 명시할 것. 안 주면 이 환경에서 pip 이 기본 인덱스를
+# 해석하지 못해 "No matching distribution found" 로 죽는다. curl 로는 같은
+# 주소가 200 을 받으므로 네트워크 문제가 아니다.
+RUN pip install --no-cache-dir --index-url https://pypi.org/simple \
+      piper-tts \
+      openai-whisper
+
+# whisper 모델은 첫 실행 때 받아 ~/.cache/whisper 에 캐시된다. 컨테이너를
+# --rm 으로 띄우므로 미리 받아 두지 않으면 매번 다시 받는다. tiny 는 39MB 다.
+RUN python3 -c "import whisper; whisper.load_model('tiny')"
 
 # 워크스페이스는 실행 시 볼륨으로 마운트한다. 이미지에 굽지 않는 이유는
 # 소스를 고칠 때마다 이미지를 다시 만들지 않기 위해서다.
