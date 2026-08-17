@@ -136,15 +136,26 @@ class JongkyCorridorEnvCfg(DirectRLEnvCfg):
     # spawn 을 주어 camera_link 의 자식으로 새로 만든다. 부모 변환을 상속하므로
     # offset 은 0 이면 되고, 장착 위치는 URDF 실측값이 그대로 반영된다.
     #
-    # TODO: focal_length 를 아스트라 실측 FOV 로 교체할 것. 아래는 HFOV 60도 가정
-    #       (f = (aperture/2) / tan(HFOV/2) = 10.4775 / tan(30도)).
-    #       clipping_range 하한도 최소거리 실측(check_depth_min_range.py) 후 교체.
+    # [화각] 실측값이다 — 아스트라가 발행하는 camera_info 의 K 행렬에서 뽑았다.
+    #   640x480, fx=fy=579.01, cx=319.5, cy=239.5
+    #   HFOV = 2*atan(640/(2*579.01)) = 57.86도,  VFOV = 45.03도
+    #   focal_length = (aperture/2) / tan(HFOV/2) = 10.4775 / tan(28.93도) = 18.958
+    #
+    # ROS 의 K 는 픽셀 단위이고 Isaac 의 PinholeCameraCfg 는 물리 카메라 모델(mm)이라
+    # 화각을 거쳐 변환해야 한다. horizontal_aperture 를 바꾸면 focal_length 도
+    # 같이 바꿔야 HFOV 가 유지된다.
+    #
+    # 재측정: ros2 topic echo /camera/rgb/camera_info (스트림이 lazy 라
+    #   이미지를 구독하고 있어야 나온다)
+    #
+    # TODO: clipping_range 하한은 아직 가정이다. 아스트라 최소거리를
+    #       check_depth_min_range.py 로 실측해 교체할 것.
     tiled_camera: TiledCameraCfg = TiledCameraCfg(
         prim_path="/World/envs/env_.*/Robot/base_footprint/base_link/camera_link/front_cam",
         offset=TiledCameraCfg.OffsetCfg(pos=(0.0, 0.0, 0.0), rot=(0.5, -0.5, 0.5, -0.5), convention="ros"),
         data_types=["rgb"],
         spawn=sim_utils.PinholeCameraCfg(
-            focal_length=18.15,
+            focal_length=18.958,
             focus_distance=400.0,
             horizontal_aperture=20.955,
             clipping_range=(0.1, 20.0),

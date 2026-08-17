@@ -48,6 +48,24 @@
   }
   #cancel.show { display: block; }
 
+  /* 눌러서 말하기. 화면 오른쪽 아래에 크게 띄운다 — 장갑 낀 손으로도 눌리게. */
+  #ptt {
+    position: fixed; right: 26px; bottom: 26px;
+    width: 108px; height: 108px; border-radius: 50%;
+    font-size: 46px; background: #2f4a7a; border-color: #4b7bec;
+    display: none; align-items: center; justify-content: center;
+    box-shadow: 0 6px 20px rgba(0,0,0,.45);
+  }
+  #ptt.show { display: flex; }
+  #ptt.listening {
+    background: #b33939; border-color: #fc5c65;
+    animation: pulse 1.1s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%,100% { transform: scale(1); }
+    50%     { transform: scale(1.08); }
+  }
+
   .empty { color: #8b93a7; font-size: 19px; line-height: 1.7; padding: 20px; }
   code { background: #1c212c; padding: 3px 7px; border-radius: 5px; font-size: 16px; }
 </style>
@@ -67,6 +85,7 @@
   <div id="grid"></div>
   <button id="cancel">안내 취소</button>
 </div>
+<button id="ptt" title="눌러서 말하기">🎤</button>
 
 <script>
 const grid = document.getElementById('grid');
@@ -111,6 +130,9 @@ async function go(destination) {
 
 cancelBtn.onclick = () => fetch('/api/cancel', {method: 'POST'});
 
+const pttBtn = document.getElementById('ptt');
+pttBtn.onclick = () => fetch('/api/listen', {method: 'POST'});
+
 // 상태 폴링. 도착·실패는 노드가 판정하므로 화면은 그대로 받아 그리기만 한다.
 async function poll() {
   try {
@@ -120,6 +142,9 @@ async function poll() {
     distEl.textContent = s.status === 'navigating' && s.distance > 0
       ? `${s.distance.toFixed(1)} m 남음` : '';
     cancelBtn.classList.toggle('show', s.status === 'navigating');
+    // 마이크는 STT 가 준비됐고 주행 중이 아닐 때만 보인다
+    pttBtn.classList.toggle('show', s.can_listen && s.status !== 'navigating');
+    pttBtn.classList.toggle('listening', s.status === 'listening');
     document.querySelectorAll('#grid button')
       .forEach(b => b.disabled = s.status === 'navigating');
   } catch (e) { /* 노드 재시작 중일 수 있다. 다음 주기에 다시 시도한다 */ }

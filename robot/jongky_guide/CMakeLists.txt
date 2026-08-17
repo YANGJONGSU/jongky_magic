@@ -15,10 +15,13 @@ install(
   DESTINATION lib/${PROJECT_NAME}
 )
 
-# speech.py 는 guide_node.py 가 import 한다. 실행 파일이 아니므로
-# PROGRAMS 가 아니라 같은 디렉터리에 얹어 둔다.
+# guide_node.py 가 import 하는 모듈들. 실행 파일이 아니므로 PROGRAMS 가 아니라
+# 같은 디렉터리에 얹어 둔다.
 install(
-  FILES tools/speech.py
+  FILES
+  tools/speech.py
+  tools/listen.py
+  tools/brain.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

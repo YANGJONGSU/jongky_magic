@@ -47,6 +47,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential \
       git \
       alsa-utils \
+      ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # ── 아스트라(Orbbec Astra, USB 2bc5:0401) ────────────────────────────────────

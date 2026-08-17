@@ -1,7 +1,8 @@
 # jongky_rl — Isaac Lab 복도 주행 학습 환경
 
 종키프로 안내로봇의 주행 정책을 학습시키기 위한 Isaac Lab `DirectRLEnv`.
-DreamerV3(Ray RLlib) 로 사전학습한 뒤 실물에서 파인튜닝하는 것이 목표다.
+DreamerV3 로 사전학습한 뒤 실물에서 파인튜닝하는 것이 목표다.
+학습 프레임워크는 아직 안 정해졌다 — 맨 아래 "DreamerV3 연결" 참조.
 
 ROS 패키지가 아니다. Isaac Lab venv 에서 직접 돌린다.
 
@@ -13,6 +14,8 @@ tools/smoke_env.py         환경 인스턴스화 + 몇 스텝 굴려보기
 tools/diag_drive.py        구동 진단. 램프·기구학을 우회하고 바퀴에 속도를 직접 꽂는다
 tools/check_merged.py      USD 질량 합 · 센서 프레임 생존 확인
 tools/inspect_collisions.py  충돌 prim 구조 훑기
+rllib_wrapper.py           RLlib 다리 (미동작 — 아래 참조)
+train_dreamer.py           DreamerV3 학습 (미동작 — 아래 참조)
 ```
 
 ## 사전 준비 — URDF → USD
@@ -57,12 +60,19 @@ OMNI_KIT_ACCEPT_EULA=YES ~/isaac/env_isaaclab/bin/python -u \
 | `a_max` | 0.30 m/s² (액션 램프) |
 | `wheel_radius` | 0.0335 m |
 | `wheel_separation` | 0.11909 m |
+| 카메라 HFOV | **57.86도** (`focal_length` 18.958) |
 
 MARS `actor_phase15.pt` 가 종키에 못 올라가는 이유가 정확히 이 불일치다 —
 `MAX_VX 1.5` 대 실차 `0.40`, 3.75배.
 
 카메라는 `camera_link` prim 아래에 붙이므로 실측 장착 위치
 (base_link 기준 x=0.07, z=0.1656)가 자동 반영된다.
+
+화각은 아스트라가 발행하는 `camera_info` 의 K 행렬에서 뽑았다
+(640x480, fx=fy=579.01 → HFOV 57.86도). 줄자로 재는 것보다 정확하다 —
+드라이버가 장치에서 읽어온 공장 캘리브레이션 값이기 때문이다.
+다시 재려면 이미지를 구독한 상태에서 `ros2 topic echo /camera/rgb/camera_info`
+(스트림이 lazy 라 구독자가 없으면 camera_info 도 안 나온다).
 
 ## 밟은 지뢰
 
@@ -136,10 +146,31 @@ implicit actuator 에서 **그냥 무시된다.** `*_sim` 접미사를 쓸 것.
   (충돌 없음, kinematic, 리셋 때 목표 위치로 이동). 실물 복도에서 강의장
   문·표지판이 이 역할을 해야 sim2real 이 성립한다 — 현장 확인 필요.
   저차원 상태(목표거리, sin/cos 방위, v, omega)는 `state_space` 로 빼 두었다
-- **카메라 FOV** — 지금 HFOV 60도 가정(`focal_length=18.15`). 아스트라 실측으로
-  교체할 것. `clipping_range` 하한도 최소거리 실측 후 교체
+- **`clipping_range` 하한** — 지금 0.1m 가정. 아스트라 최소거리를
+  `check_depth_min_range.py` 로 실측해 교체할 것
 - **복도 폭** — 지금 2.4 m. 현장 실측으로 교체
 - **환경 기하** — SLAM 지도에서 복도를 뽑아오면 실제 건물과 맞출 수 있다
-- **DreamerV3 래퍼** — RLlib 은 gymnasium 인터페이스를 받는다. 병렬 env 는
-  4~16 개로 (Isaac Lab 예제는 PPO 용 수천 개지만 DreamerV3 는 sample-efficient
-  설계라 그렇게 필요 없고, 카메라 렌더링 VRAM 도 16GB 에 그 정도까지만 들어간다)
+
+## DreamerV3 연결 — RLlib 은 막혀 있다
+
+`rllib_wrapper.py` · `train_dreamer.py` 는 **동작하지 않는다.** 기록으로 남겨 둔다.
+
+```
+TypeError: The environment must inherit from the gymnasium.Env class,
+actual class: IsaacLabRLlibVecEnv
+```
+
+RLlib 신 API 스택의 `SingleAgentEnvRunner` 는 `gym.make_vec()` 으로 **자기가
+벡터화를 한다.** 이미 벡터화된 env 를 받아 주지 않는다. 그런데 **Isaac Sim 은
+한 프로세스에 하나만 뜨므로** env 생성을 RLlib 에 맡길 수가 없다.
+
+남은 길은 셋이다.
+
+| | |
+|---|---|
+| `num_envs=1` 로 단일 env | 즉시 되지만 GPU 병렬성을 버린다. DayDreamer 도 실물 1대였으니 동작은 한다 |
+| 커스텀 EnvRunner | `make_env` 만 갈아끼운다. 병렬성은 지키지만 RLlib 내부에 의존한다 |
+| **`dreamerv3-torch` 로 교체** | gym env 를 직접 받는다. 계획서가 원래 후보로 적어 둔 것 |
+
+RLlib DreamerV3 는 Atari/DMC 벤치마크용이라 외부 시뮬레이터를 물리는 경로가
+닦여 있지 않다. 세 번째가 마찰이 가장 적을 것으로 본다.

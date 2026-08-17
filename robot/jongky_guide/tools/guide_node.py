@@ -33,6 +33,8 @@ from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 from rclpy.node import Node
 from std_msgs.msg import String
 
+from brain import Brain
+from listen import Listener
 from speech import Speaker
 
 WEB_DIR = os.path.join(get_package_share_directory("jongky_guide"), "web")
@@ -64,10 +66,19 @@ class GuideState:
 
 
 class GuideNode(Node):
-    def __init__(self, waypoint_path: str, speaker: Speaker, state: GuideState):
+    def __init__(
+        self,
+        waypoint_path: str,
+        speaker: Speaker,
+        state: GuideState,
+        listener: Listener | None = None,
+        brain: Brain | None = None,
+    ):
         super().__init__("jongky_guide")
         self._speaker = speaker
         self._state = state
+        self._listener = listener
+        self._brain = brain
         self._nav = BasicNavigator()
         self._waypoints = self._load_waypoints(waypoint_path)
         self._task: threading.Thread | None = None
@@ -155,6 +166,71 @@ class GuideNode(Node):
         if not ok:
             self.get_logger().warn(err)
 
+    # ── 음성 입력 (PTT) ───────────────────────────────────────────────────
+    def listen_and_go(self) -> tuple[bool, str]:
+        """버튼 한 번 = 한 마디 듣고 목적지로 출발.
+
+        해석은 두 단계다. 문자열 매칭을 먼저 하고, 실패했을 때만 LLM 에 넘긴다.
+        빠르고 확실한 경로를 우선해야 지연도 오판도 줄어든다.
+        """
+        if not self._listener or not self._listener.ready:
+            return False, "음성 입력이 준비되지 않았습니다"
+        if self._listener.busy:
+            return False, "이미 듣고 있습니다"
+
+        threading.Thread(target=self._listen_loop, daemon=True).start()
+        return True, ""
+
+    def _listen_loop(self) -> None:
+        prev = self._state.snapshot()
+        self._state.set(message="말씀해 주세요", status="listening")
+
+        text, wav = self._listener.listen_once()
+        if not text and not wav:
+            self._state.set(status=prev["status"], message="잘 못 들었습니다. 다시 말씀해 주세요")
+            return
+
+        if text:
+            self._state.set(message=f"'{text}'")
+        dest = self._resolve(text, wav)
+
+        if not dest:
+            self._state.set(status=prev["status"], message="어디로 갈지 알아듣지 못했습니다")
+            self._speaker.say("어디로 갈지 알아듣지 못했습니다. 화면에서 골라 주세요")
+            return
+
+        ok, err = self.start_guiding(dest)
+        if not ok:
+            self._state.set(status=prev["status"], message=err)
+
+    def _resolve(self, text: str | None, wav: bytes | None = None) -> str | None:
+        """발화 → 목적지. 싼 경로부터 차례로 시도한다.
+
+          1) Whisper 텍스트 + 문자열 매칭 — 온보드, 1~2초, 네트워크 불필요
+          2) Whisper 텍스트 + LLM        — "삼백사호" 같은 표현을 메운다
+
+        1) 에서 끝나면 관제에 아무것도 안 보낸다.
+
+        원본 오디오를 LLM 에 직접 넘기는 3단계도 생각했지만 뺐다 — ollama 가
+        오디오 입력을 안 넘겨줘서 근거 없는 답이 나온다 (brain.py 주석 참조).
+        wav 인자는 그때를 대비해 자리만 남겨 둔다.
+        """
+        names = list(self._waypoints)
+
+        if text:
+            flat = text.replace(" ", "")
+            for name in names:
+                if name.replace(" ", "") in flat:
+                    self.get_logger().info(f"[매칭] {name}")
+                    return name
+
+        if text and self._brain:
+            dest = self._brain.resolve_destination(text, names)
+            if dest:
+                self.get_logger().info(f"[LLM] {dest}")
+                return dest
+        return None
+
 
 # ── 웹 UI ─────────────────────────────────────────────────────────────────
 def make_handler(node: GuideNode, state: GuideState):
@@ -179,7 +255,9 @@ def make_handler(node: GuideNode, state: GuideState):
             elif self.path == "/api/destinations":
                 self._json({"destinations": node.destinations})
             elif self.path == "/api/status":
-                self._json(state.snapshot())
+                s = state.snapshot()
+                s["can_listen"] = bool(node._listener and node._listener.ready)
+                self._json(s)
             else:
                 self._send(404, b"not found", "text/plain")
 
@@ -193,6 +271,9 @@ def make_handler(node: GuideNode, state: GuideState):
             elif self.path == "/api/cancel":
                 node.cancel()
                 self._json({"ok": True})
+            elif self.path == "/api/listen":
+                ok, err = node.listen_and_go()
+                self._json({"ok": ok, "error": err}, 200 if ok else 400)
             else:
                 self._send(404, b"not found", "text/plain")
 
@@ -205,12 +286,25 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--voice", default="", help="piper 음성 모델 경로 (없으면 무음 폴백)")
     parser.add_argument("--audio-device", default="", help="aplay -D 값 (예: plughw:2,0)")
+    parser.add_argument("--mic", default="", help="arecord -D 값 (예: plughw:1,0). 주면 PTT 가 켜진다")
+    parser.add_argument("--stt-model", default="tiny", help="whisper 모델 (tiny/base/small)")
+    parser.add_argument("--llm", default="", help="ollama 모델 이름 (예: gemma4:e2b). 주면 LLM 해석이 켜진다")
+    # 기본은 온보드(localhost)다. 관제 노트북에 두려면 그쪽 주소를 준다 —
+    # 젯슨 8GB 에 안 들어가는 큰 모델은 그렇게 쓴다. 판단이 이벤트 기반이라
+    # 네트워크가 끊겨도 nav2 기본 동작으로 떨어질 뿐 주행은 계속된다.
+    parser.add_argument("--llm-url", default="", help="ollama 주소 (예: http://192.168.129.97:11434/api/generate)")
     args, ros_args = parser.parse_known_args()
 
     rclpy.init(args=ros_args)
     speaker = Speaker(voice=args.voice, device=args.audio_device)
+    # 둘 다 선택적이다. 없으면 그 기능만 빠지고 버튼 UI 는 그대로 돈다.
+    listener = Listener(args.stt_model, args.mic) if args.mic else None
+    brain_kw = {"model": args.llm}
+    if args.llm_url:
+        brain_kw["url"] = args.llm_url
+    brain = Brain(**brain_kw) if args.llm else None
     state = GuideState()
-    node = GuideNode(args.waypoints, speaker, state)
+    node = GuideNode(args.waypoints, speaker, state, listener, brain)
 
     server = ThreadingHTTPServer(("0.0.0.0", args.port), make_handler(node, state))
     threading.Thread(target=server.serve_forever, daemon=True).start()

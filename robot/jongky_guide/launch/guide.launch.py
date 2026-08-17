@@ -31,6 +31,8 @@ def generate_launch_description():
         DeclareLaunchArgument("use_voice", default_value="false"),
         DeclareLaunchArgument("voice_model", default_value="tiny"),
         DeclareLaunchArgument("mic", default_value=""),
+        DeclareLaunchArgument("llm", default_value="", description="ollama 모델 (예: gemma4:e2b)"),
+        DeclareLaunchArgument("llm_url", default_value="", description="ollama 주소. 비우면 온보드"),
         DeclareLaunchArgument("tts_voice", default_value="", description="piper onnx 경로"),
         DeclareLaunchArgument("audio_device", default_value="", description="aplay -D 값"),
         DeclareLaunchArgument("use_rviz", default_value="false"),
@@ -57,6 +59,9 @@ def generate_launch_description():
             "--port", LaunchConfiguration("port"),
             "--voice", LaunchConfiguration("tts_voice"),
             "--audio-device", LaunchConfiguration("audio_device"),
+            "--mic", LaunchConfiguration("mic"),
+            "--llm", LaunchConfiguration("llm"),
+            "--llm-url", LaunchConfiguration("llm_url"),
         ],
     )
 
