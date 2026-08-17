@@ -26,7 +26,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 #
 # vcs import 를 쓰려면 python3-vcstool 이 필요하다.
 #
-# 아스트라(astra_camera)는 별도 검증 후 추가한다.
+# 아스트라는 orbbec_camera 로 붙인다. astra_camera 는 Jazzy 에 deb 이 없다.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3-vcstool \
       ros-${ROS_DISTRO}-ros2-control \
@@ -41,6 +41,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ros-${ROS_DISTRO}-navigation2 \
       ros-${ROS_DISTRO}-nav2-bringup \
       ros-${ROS_DISTRO}-slam-toolbox \
+      ros-${ROS_DISTRO}-orbbec-camera \
       python3-colcon-common-extensions \
       build-essential \
     && rm -rf /var/lib/apt/lists/*

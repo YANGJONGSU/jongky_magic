@@ -44,7 +44,9 @@ slam_toolbox:
     minimum_travel_heading: 0.10
     link_match_minimum_response_fine: 0.1
     link_scan_maximum_distance: 1.5
-    loop_search_maximum_distance: 3.0
+    # 긴 복도용. 3.0 이면 누적 드리프트가 그보다 커졌을 때 루프 후보 자체가
+    # 안 잡혀 지도에 복도가 두 겹으로 겹친다. loop_search_space_dimension 과 맞춘다.
+    loop_search_maximum_distance: 8.0
     do_loop_closing: true
     loop_match_minimum_chain_size: 10
     loop_match_maximum_variance_coarse: 3.0

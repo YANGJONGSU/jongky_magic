@@ -55,6 +55,7 @@ exec docker run -it --rm \
   --cap-add SYS_NICE \
   -v "$WS:/ws" \
   -v /dev/shm:/dev/shm \
+  -v /dev/bus/usb:/dev/bus/usb \
   "${DEVICE_ARGS[@]}" \
   "${ENV_ARGS[@]}" \
   -e ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}" \
