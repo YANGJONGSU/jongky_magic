@@ -35,8 +35,12 @@ jongky_exec() {
   [ -d /dev/snd ] && DEV+=(--device /dev/snd)
   [ -d "$VOICES" ] && DEV+=(-v "$VOICES:/voices:ro")
 
+  # --privileged 가 필요하다. 아스트라(openni2_camera, libusb 백엔드)가
+  # --device 만으로는 안 열린다 — USB 버스를 마운트해도 "Input/output error"
+  # 로 실패한다. 단독 컨테이너로 --privileged 없이 --network host 없이 돌리면
+  # 되던 게, jmap 이 만드는 컨테이너에서만 안 되는 걸로 이 문제를 잡았다.
   docker run -d --rm --name "$CONTAINER" \
-    --network host --ipc host --cap-add SYS_NICE \
+    --network host --ipc host --cap-add SYS_NICE --privileged \
     -v "$WS:/ws" -v /dev/shm:/dev/shm -v /dev/bus/usb:/dev/bus/usb \
     -v "$HOME:/host" \
     "${DEV[@]}" \

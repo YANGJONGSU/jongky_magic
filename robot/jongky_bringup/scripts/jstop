@@ -26,4 +26,15 @@ if docker exec "$CONTAINER" pgrep -f "ros2 bag record" >/dev/null 2>&1; then
 fi
 
 docker stop "$CONTAINER" >/dev/null
+
+# 컨테이너가 root 로 도는 탓에 bag 과 지도가 root 소유로 떨어진다.
+# 그대로 두면 옮기지도 지우지도 못한다 (sudo 없이는).
+for d in "$HOME/bags" "$HOME/jongky_ws/src/jongky_navigation/maps"; do
+  [ -d "$d" ] || continue
+  if find "$d" -user root -print -quit 2>/dev/null | grep -q .; then
+    sudo -n chown -R "$(id -u):$(id -g)" "$d" 2>/dev/null \
+      || echo "  소유권 정리에 sudo 가 필요하다:  sudo chown -R \$USER $d"
+  fi
+done
+
 echo "정리 완료. bag 은 ~/bags/ 에 있다"
