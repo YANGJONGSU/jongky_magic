@@ -19,11 +19,17 @@ echo "SLAM 기동 · bag → ~/bags/$STAMP"
 echo "  다른 터미널에서:  jdrive $FLOOR   →   jsave $FLOOR   →   jstop"
 echo
 
-# bag 은 런치와 수명을 따로 둔다. 런치를 Ctrl+C 로 끊어도 bag 은 살아 있고,
+# 구분자에 주의. `A && B &` 는 **체인 전체**를 백그라운드로 보내므로
+# source 가 그 서브셸에만 적용되고, 뒤따르는 ros2 launch 는 ROS 가 안 잡힌
+# 부모 셸에서 돌아 "ros2: command not found" 가 난다.
+# source 는 `;` 로 끊어 부모 셸에 남기고, bag 만 백그라운드로 보낸다.
+#
+# bag 은 런치와 수명을 따로 둔다. 런치를 Ctrl+C 로 끊어도 녹화가 살아 있고,
 # jstop 이 SIGINT 로 정상 종료시킨다 (그래야 인덱스가 쓰인다).
-jongky_exec "$ROS_SETUP && mkdir -p /host/bags && \
+jongky_exec "$ROS_SETUP; \
+  mkdir -p /host/bags; \
   nohup ros2 bag record -o '/host/bags/$STAMP' \
     /scan /odom /tf /tf_static /imu/data /joint_states /cmd_vel \
     /camera/rgb/image_raw > /tmp/bag.log 2>&1 < /dev/null & \
-  sleep 2 && \
+  sleep 3; \
   ros2 launch jongky_navigation bringup_navigation.launch.py mode:=slam use_rviz:=false"

@@ -10,9 +10,15 @@ VOICES="${JONGKY_VOICES:-$HOME/voices}"
 CONTAINER="${JONGKY_CONTAINER:-jongky_field}"
 
 # 컨테이너가 살아 있으면 붙고, 없으면 띄운다.
+# 터미널에서 직접 칠 때만 -it 를 붙인다. 파이프나 스크립트로 돌릴 때
+# -it 를 주면 "cannot attach stdin to a TTY-enabled container" 로 죽는다.
+_tty_flags() {
+  if [ -t 0 ] && [ -t 1 ]; then echo "-it"; else echo "-i"; fi
+}
+
 jongky_exec() {
   if docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
-    docker exec -it "$CONTAINER" bash -lc "$*"
+    docker exec $(_tty_flags) "$CONTAINER" bash -lc "$*"
     return $?
   fi
 
@@ -40,7 +46,7 @@ jongky_exec() {
     "$IMAGE" sleep infinity >/dev/null
 
   sleep 2
-  docker exec -it "$CONTAINER" bash -lc "$*"
+  docker exec $(_tty_flags) "$CONTAINER" bash -lc "$*"
 }
 
 # 컨테이너 안에서 ROS 환경을 잡는 접두사
