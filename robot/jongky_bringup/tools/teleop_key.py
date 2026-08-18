@@ -130,7 +130,7 @@ class TeleopKey(Node):
         return True
 
 
-def read_key(timeout: float = 0.1) -> str:
+def read_key(timeout: float = 0.05) -> str:
     """비차단 1글자 읽기. 아무 키도 없으면 빈 문자열."""
     if select.select([sys.stdin], [], [], timeout)[0]:
         return sys.stdin.read(1)
@@ -204,8 +204,11 @@ def main() -> None:
                 else:
                     print("\r  아직 없다")
 
+            # 명령은 계속 재발행한다. diff_drive_controller 의 cmd_vel_timeout
+            # 이 0.5s 라, 한 번만 보내면 곧 정지로 돌아간다 — i 를 눌러도
+            # 안 움직이는 것처럼 보이는 원인이 이것이다.
             node.publish(vx, wz)
-            rclpy.spin_once(node, timeout_sec=0.0)
+            rclpy.spin_once(node, timeout_sec=0.001)
     except KeyboardInterrupt:
         pass
     finally:

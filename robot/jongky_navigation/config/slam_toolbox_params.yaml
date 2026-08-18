@@ -41,8 +41,12 @@ slam_toolbox:
     # ── 스캔 매칭 및 이동 임계값 ────────────────────────────────────────────────
     # 로봇이 10cm 이상 직진하거나 0.1 rad (~5.7도) 이상 회전할 때 새 노드 추가
     minimum_travel_distance: 0.10
-    minimum_travel_heading: 0.10
-    link_match_minimum_response_fine: 0.1
+    # 회전 임계를 20도로 올린다. 5.7도면 돌 때마다 노드가 쏟아지는데,
+    # 회전 중 스캔은 원래 부정확해서 그래프 전체를 흔든다.
+    minimum_travel_heading: 0.35
+    # 매칭 품질 기준. 0.1 은 "10%만 맞아도 같은 곳" 이라 엉뚱한 노드끼리
+    # 연결돼 지도가 접힌다.
+    link_match_minimum_response_fine: 0.45
     link_scan_maximum_distance: 1.5
     # 긴 복도용. 3.0 이면 누적 드리프트가 그보다 커졌을 때 루프 후보 자체가
     # 안 잡혀 지도에 복도가 두 겹으로 겹친다. loop_search_space_dimension 과 맞춘다.
@@ -51,10 +55,13 @@ slam_toolbox:
     loop_match_minimum_chain_size: 10
     loop_match_maximum_variance_coarse: 3.0
     loop_match_minimum_response_coarse: 0.35
-    loop_match_minimum_response_fine: 0.45
+    loop_match_minimum_response_fine: 0.55
 
     # ── 상관 탐색 공간 ─────────────────────────────────────────────────────────
-    correlation_search_space_dimension: 0.5
+    # 스캔 매칭 탐색 범위. **지도가 겹쳐 그려지는 주된 원인이 여기다.**
+    # 0.5m 면 로봇이 그보다 어긋났을 때 매칭에 실패하고, 그러면 오도메트리만
+    # 믿고 그린다 — 회전 오차가 누적된 채로 같은 복도를 다른 위치에 겹쳐 그린다.
+    correlation_search_space_dimension: 1.5
     correlation_search_space_resolution: 0.01
     correlation_search_space_smear_deviation: 0.1
 
