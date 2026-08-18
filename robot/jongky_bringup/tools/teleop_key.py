@@ -13,15 +13,27 @@
     ros2 run jongky_bringup teleop_key.py --speed 0.15 --out ~/waypoints.yaml
 
 조작:
-    i / , : 전진 / 후진          j / l : 좌회전 / 우회전
-    u / o : 전진+좌 / 전진+우     스페이스 or k : 즉시 정지
-    z / x : 최고 속도 -/+ 10%     c / v : 최고 각속도 -/+ 10%
-    w     : 지금 위치를 waypoint 로 저장 (이름을 물어본다)
-    p     : 저장된 waypoint 목록
-    q     : 종료 (정지 명령을 내고 나간다)
+    i     전진          ,     후진
+    j     좌회전        l     우회전
+    u/o   전진하며 좌/우로 (모퉁이 돌 때 이게 편하다)
+    k     정지
 
-주의: 키를 누르고 있는 동안만 가는 게 아니라, 마지막 명령이 유지된다.
-멈추려면 스페이스를 칠 것. cmd_vel_timeout 0.5s 라 노드가 죽으면 자동으로 선다.
+    z/x   속도  느리게/빠르게 (10%씩)
+    c/v   회전  느리게/빠르게 (10%씩)
+
+    w     지금 위치를 waypoint 로 저장 → 이름 물어봄 → 치고 엔터
+    p     저장된 목록 보기
+    q     종료
+
+주행 팁
+    · 키를 누르고 있는 게 아니다. 한 번 누르면 그 명령이 계속 유지된다.
+      멈추려면 k 를 친다.
+    · 모퉁이는 j/l 로 제자리에서 돌지 말고, u/o 로 천천히 돌아 나가는 편이
+      지도가 깨끗하다. 제자리 회전은 스캔 정합이 어긋나기 쉽다.
+    · 벽에 너무 붙지 말 것. 라이다가 벽만 보면 위치를 잃는다.
+      복도 가운데로 다니면 양쪽 벽이 다 보여 정합이 잘 된다.
+    · 왔던 길을 한 번 되돌아오면 루프가 닫혀 지도가 크게 정확해진다.
+    · 회전이 빠르다 싶으면 c 를 몇 번 눌러 더 낮춘다.
 """
 from __future__ import annotations
 
@@ -44,8 +56,10 @@ V_MAX = 0.40      # m/s
 OMEGA_MAX = 1.50  # rad/s
 
 # 맵핑 주행 기본값. 천천히 돌아야 스캔이 촘촘히 쌓이고 루프도 잘 닫힌다.
+# 회전은 특히 느려야 한다 — 빠르게 돌면 스캔 정합이 깨져 지도가 뭉개진다.
+# 0.25 rad/s 는 약 14도/초, 한 바퀴에 25초쯤 걸린다.
 DEFAULT_SPEED = 0.15
-DEFAULT_TURN = 0.5
+DEFAULT_TURN = 0.25
 
 MOVES = {
     "i": (1.0, 0.0),
@@ -55,7 +69,6 @@ MOVES = {
     "u": (1.0, 1.0),
     "o": (1.0, -1.0),
     "k": (0.0, 0.0),
-    " ": (0.0, 0.0),
 }
 
 
@@ -116,12 +129,17 @@ def read_key(timeout: float = 0.1) -> str:
 
 
 def prompt(settings, message: str) -> str:
-    """waypoint 이름처럼 한 줄을 받을 때만 잠깐 정상 터미널로 돌아간다."""
+    """waypoint 이름처럼 한 줄을 받을 때만 잠깐 정상 터미널로 돌아간다.
+
+    돌아온 뒤 입력 버퍼를 비우는 것이 중요하다. 안 그러면 이름 끝의 엔터가
+    다음 키 입력으로 읽혀서, 저장 직후 조작이 먹통이 된 것처럼 보인다.
+    """
     termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
     try:
         return input(message).strip()
     finally:
         tty.setcbreak(sys.stdin.fileno())
+        termios.tcflush(sys.stdin, termios.TCIFLUSH)
 
 
 def main() -> None:

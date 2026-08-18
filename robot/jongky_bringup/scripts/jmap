@@ -56,7 +56,11 @@ trap finish INT TERM
 #
 # 카메라를 bag 보다 먼저 띄우는 이유: openni2 는 lazy 발행이라 구독자가
 # 붙어야 스트림이 돈다. 순서가 반대면 bag 이 빈 토픽을 잡는다.
+# 소스가 바뀌었으면 반영한다. colcon 은 변경 없으면 몇 초 만에 끝난다 —
+# 스크립트를 고쳐 놓고 빌드를 잊어 옛 코드가 도는 일이 없게 한다.
 jongky_exec "$ROS_SETUP; \
+  cd /ws && colcon build --packages-select jongky_bringup jongky_navigation --symlink-install > /tmp/build.log 2>&1; \
+  source /ws/install/setup.bash; \
   mkdir -p /host/bags; \
   $CAM_CMD \
   nohup ros2 bag record -o '/host/bags/$STAMP' $TOPICS > /tmp/bag.log 2>&1 < /dev/null & \
