@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# SLAM + 카메라 + rosbag 기동. 맵핑 주행의 1번.
+# SLAM + 카메라 + rosbag 기동. 맵핑의 시작이자 끝.
 #
-#   jmap 10f
+#   jmap 10f                 시작
+#   [Ctrl+C]                 지도 저장 + 정리까지 자동
 #   jmap 10f --no-camera     영상 없이 (bag 이 1/30 로 줄어든다)
 #
 # 한 번 주행에 지도·waypoint·bag·Cosmos 씨앗 영상이 다 나온다.
 # 현장은 다시 가기 비싸므로 받을 수 있는 건 한 번에 받는다.
-set -euo pipefail
+set -uo pipefail
 source "$(dirname "$(readlink -f "$0")")/_common.sh"
 
 FLOOR="${1:-}"
@@ -24,7 +25,6 @@ TOPICS="/scan /odom /tf /tf_static /imu/data /joint_states /cmd_vel"
 
 if [ "$WANT_CAM" = "1" ]; then
   TOPICS="$TOPICS /camera/rgb/image_raw"
-  # 640x480 RGB 30fps = 약 32 MB/s (실측). 10분이면 19GB 다.
   CAM_CMD="nohup ros2 launch openni2_camera camera_only.launch.py > /tmp/cam.log 2>&1 < /dev/null & sleep 12;"
   echo "SLAM + 카메라 · bag → ~/bags/$STAMP   (영상 때문에 분당 약 1.9GB)"
   df -h / | awk 'NR==2 {print "  디스크 여유: " $4}'
@@ -32,22 +32,36 @@ else
   CAM_CMD=""
   echo "SLAM (영상 없음) · bag → ~/bags/$STAMP"
 fi
-echo "  다른 터미널에서:  jdrive $FLOOR   →   jsave $FLOOR   →   jstop"
+echo "  주행:  다른 터미널에서  jdrive $FLOOR"
+echo "  종료:  여기서 Ctrl+C    (지도 저장·정리까지 자동)"
 echo
 
-# 구분자에 주의. `A && B &` 는 **체인 전체**를 백그라운드로 보내므로
-# source 가 그 서브셸에만 적용되고, 뒤따르는 ros2 launch 는 ROS 가 안 잡힌
-# 부모 셸에서 돌아 "ros2: command not found" 가 난다.
-# source 는 `;` 로 끊어 부모 셸에 남기고, 백그라운드로 보낼 것만 & 로 보낸다.
+# Ctrl+C 한 번으로 끝나게 한다. 예전에는 jsave·jstop 을 따로 쳐야 했는데,
+# 엘리베이터 타기 전에 빼먹으면 bag 이 계속 돌고 다음 층 맵핑과 충돌한다.
+FINISHED=0
+finish() {
+  [ "$FINISHED" = "1" ] && return
+  FINISHED=1
+  echo
+  echo "── 종료 중 (건드리지 말 것) ──"
+  "$(dirname "$(readlink -f "$0")")/jsave" "$FLOOR" 2>&1 | tail -3
+  "$(dirname "$(readlink -f "$0")")/jstop" 2>&1 | tail -3
+  echo "── 완료 ──"
+  exit 0
+}
+trap finish INT TERM
+
+# 구분자에 주의. `A && B &` 는 체인 전체를 백그라운드로 보내므로 source 가
+# 그 서브셸에만 적용되고, 뒤따르는 ros2 launch 가 ROS 없이 돌아 죽는다.
 #
 # 카메라를 bag 보다 먼저 띄우는 이유: openni2 는 lazy 발행이라 구독자가
 # 붙어야 스트림이 돈다. 순서가 반대면 bag 이 빈 토픽을 잡는다.
-#
-# bag 은 런치와 수명을 따로 둔다. 런치를 Ctrl+C 로 끊어도 녹화가 살아 있고,
-# jstop 이 SIGINT 로 정상 종료시킨다 (그래야 인덱스가 쓰인다).
 jongky_exec "$ROS_SETUP; \
   mkdir -p /host/bags; \
   $CAM_CMD \
   nohup ros2 bag record -o '/host/bags/$STAMP' $TOPICS > /tmp/bag.log 2>&1 < /dev/null & \
   sleep 3; \
-  ros2 launch jongky_navigation bringup_navigation.launch.py mode:=slam use_rviz:=false"
+  ros2 launch jongky_navigation bringup_navigation.launch.py mode:=slam use_rviz:=false" &
+
+wait $!
+finish

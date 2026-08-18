@@ -23,6 +23,13 @@ if docker exec "$CONTAINER" pgrep -f "ros2 bag record" >/dev/null 2>&1; then
     docker exec "$CONTAINER" pgrep -f "ros2 bag record" >/dev/null 2>&1 || break
     sleep 1
   done
+  # SIGINT 를 무시하고 버티는 경우가 있다. 인덱스는 이미 쓸 만큼 기다렸으므로
+  # 남아 있으면 강제로 끊는다 — 안 그러면 다음 층 맵핑에서 bag 이 겹친다.
+  if docker exec "$CONTAINER" pgrep -f "ros2 bag record" >/dev/null 2>&1; then
+    echo "  응답 없음 — 강제 종료"
+    docker exec "$CONTAINER" pkill -9 -f "ros2 bag record" 2>/dev/null || true
+    sleep 2
+  fi
 fi
 
 docker stop "$CONTAINER" >/dev/null
