@@ -41,6 +41,12 @@ def main():
         default=0.65,
         help='Occupied threshold (기본값: 0.65)',
     )
+    parser.add_argument(
+        '--timeout',
+        type=float,
+        default=20.0,
+        help='/map 구독 대기 시간 [s] (기본값: 20). map_saver_cli 기본값 2초는 짧다',
+    )
 
     args = parser.parse_args()
 
@@ -53,11 +59,14 @@ def main():
     print(f"[*] /map 토픽으로부터 지도를 저장합니다...")
     print(f"    저장 경로: {target_path}.yaml / {target_path}.pgm")
 
+    # save_map_timeout 을 늘린다. 기본 2초로는 /map 구독이 붙기 전에 포기하고
+    # "Failed to spin map subscription" 으로 죽는다 — 지도는 멀쩡히 발행 중인데도.
     cmd = [
         'ros2', 'run', 'nav2_map_server', 'map_saver_cli',
         '-f', target_path,
         '--free', str(args.free_thresh),
         '--occ', str(args.occ_thresh),
+        '--ros-args', '-p', f'save_map_timeout:={args.timeout}',
     ]
 
     try:
