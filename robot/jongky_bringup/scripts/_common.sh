@@ -16,9 +16,14 @@ _tty_flags() {
   if [ -t 0 ] && [ -t 1 ]; then echo "-it"; else echo "-i"; fi
 }
 
+# 키보드 입력이 필요한 명령(텔레옵)은 TTY 가 반드시 있어야 한다.
+# JONGKY_FORCE_TTY=1 로 강제한다 — 자동 감지에 맡기면 파이프로 실행될 때
+# termios.error: Inappropriate ioctl for device 로 죽는다.
 jongky_exec() {
+  local flags
+  if [ "${JONGKY_FORCE_TTY:-0}" = "1" ]; then flags="-it"; else flags="$(_tty_flags)"; fi
   if docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
-    docker exec $(_tty_flags) "$CONTAINER" bash -lc "$*"
+    docker exec $flags "$CONTAINER" bash -lc "$*"
     return $?
   fi
 
@@ -50,7 +55,7 @@ jongky_exec() {
     "$IMAGE" sleep infinity >/dev/null
 
   sleep 2
-  docker exec $(_tty_flags) "$CONTAINER" bash -lc "$*"
+  docker exec $flags "$CONTAINER" bash -lc "$*"
 }
 
 # 컨테이너 안에서 ROS 환경을 잡는 접두사

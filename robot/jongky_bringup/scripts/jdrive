@@ -9,6 +9,7 @@
 # w             지금 위치를 waypoint 로 저장  ← 강의장 앞에서
 # p             목록      q  종료
 set -euo pipefail
+JONGKY_FORCE_TTY=1
 source "$(dirname "$(readlink -f "$0")")/_common.sh"
 
 FLOOR="${1:-}"
