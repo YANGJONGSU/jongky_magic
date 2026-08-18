@@ -4,7 +4,7 @@ project(jongky_bringup)
 find_package(ament_cmake REQUIRED)
 
 install(
-  DIRECTORY config launch tools
+  DIRECTORY config launch tools scripts
   DESTINATION share/${PROJECT_NAME}
 )
 

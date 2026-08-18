@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# 컨테이너를 내린다. 로봇을 세우고 bag 을 정상적으로 닫는다.
+set -euo pipefail
+source "$(dirname "$(readlink -f "$0")")/_common.sh"
+
+if ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
+  echo "떠 있는 컨테이너가 없다"
+  exit 0
+fi
+
+# 1) 로봇을 세운다
+docker exec "$CONTAINER" bash -lc \
+  "$ROS_SETUP && timeout 3 ros2 topic pub --once /cmd_vel geometry_msgs/msg/TwistStamped '{}'" \
+  >/dev/null 2>&1 || true
+
+# 2) bag 을 SIGINT 로 닫는다.
+#    docker stop 은 PID 1 에만 신호를 보내므로, 그냥 내리면 bag 이 인덱스를
+#    쓰지 못하고 죽어 파일을 못 읽게 될 수 있다.
+if docker exec "$CONTAINER" pgrep -f "ros2 bag record" >/dev/null 2>&1; then
+  echo "bag 닫는 중..."
+  docker exec "$CONTAINER" pkill -INT -f "ros2 bag record" 2>/dev/null || true
+  for _ in $(seq 1 15); do
+    docker exec "$CONTAINER" pgrep -f "ros2 bag record" >/dev/null 2>&1 || break
+    sleep 1
+  done
+fi
+
+docker stop "$CONTAINER" >/dev/null
+echo "정리 완료. bag 은 ~/bags/ 에 있다"

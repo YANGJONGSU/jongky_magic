@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# 지도 저장. 맵핑 주행의 3번. jmap 이 아직 떠 있는 상태에서 실행한다.
+#
+#   jsave 10f
+set -euo pipefail
+source "$(dirname "$(readlink -f "$0")")/_common.sh"
+
+FLOOR="${1:-}"
+if [ -z "$FLOOR" ]; then
+  echo "층 이름을 줄 것:  jsave 10f" >&2
+  exit 1
+fi
+
+NAME="fastcampus_${FLOOR}"
+DIR="/ws/src/jongky_navigation/maps"
+jongky_exec "$ROS_SETUP && ros2 run jongky_navigation save_map.py --name '$NAME' --dir '$DIR'"
+echo
+echo "저장 위치: ~/jongky_ws/src/jongky_navigation/maps/${NAME}.{yaml,pgm}"

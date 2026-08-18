@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# 맵핑 시작 전 점검. 여기서 /map 이 없으면 주행해 봐야 지도가 안 쌓인다.
+set -euo pipefail
+source "$(dirname "$(readlink -f "$0")")/_common.sh"
+
+jongky_exec "$ROS_SETUP && \
+  echo '=== 토픽 ===' && \
+  for t in /scan /odom /map /cmd_vel; do \
+    if ros2 topic list 2>/dev/null | grep -qx \$t; then echo \"  \$t 있음\"; else echo \"  \$t 없음  <-- 문제\"; fi; \
+  done && \
+  echo '=== 발행률 ===' && \
+  timeout 6 ros2 topic hz /scan 2>/dev/null | head -2 && \
+  timeout 6 ros2 topic hz /odom 2>/dev/null | head -2 && \
+  echo '=== map -> base_footprint TF (w 키가 이걸 읽는다) ===' && \
+  timeout 8 ros2 run tf2_ros tf2_echo map base_footprint 2>&1 | head -4"

@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# SLAM + rosbag 기동. 맵핑 주행의 1번.
+#
+#   jmap 10f
+#
+# bag 을 같이 받는 이유: 현장은 다시 가기 비싸다. bag 이 있으면 나중에
+# 파라미터를 바꿔 지도를 다시 뽑을 수 있고, 카메라 영상은 Cosmos 씨앗이 된다.
+set -euo pipefail
+source "$(dirname "$(readlink -f "$0")")/_common.sh"
+
+FLOOR="${1:-}"
+if [ -z "$FLOOR" ]; then
+  echo "층 이름을 줄 것:  jmap 10f" >&2
+  exit 1
+fi
+
+STAMP="${FLOOR}_$(date +%m%d_%H%M)"
+echo "SLAM 기동 · bag → ~/bags/$STAMP"
+echo "  다른 터미널에서:  jdrive $FLOOR   →   jsave $FLOOR   →   jstop"
+echo
+
+# bag 은 런치와 수명을 따로 둔다. 런치를 Ctrl+C 로 끊어도 bag 은 살아 있고,
+# jstop 이 SIGINT 로 정상 종료시킨다 (그래야 인덱스가 쓰인다).
+jongky_exec "$ROS_SETUP && mkdir -p /host/bags && \
+  nohup ros2 bag record -o '/host/bags/$STAMP' \
+    /scan /odom /tf /tf_static /imu/data /joint_states /cmd_vel \
+    /camera/rgb/image_raw > /tmp/bag.log 2>&1 < /dev/null & \
+  sleep 2 && \
+  ros2 launch jongky_navigation bringup_navigation.launch.py mode:=slam use_rviz:=false"

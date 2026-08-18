@@ -93,19 +93,26 @@ ros2 run jongky_bringup teleop_key.py --speed 0.15 --out ~/waypoints_10f.yaml
 
 ### 현장 맵핑 절차
 
+`scripts/` 의 단축 명령을 쓴다 (`scripts/install.sh` 로 한 번 설치).
+**7인치 터치스크린 + USB 키보드만으로 돌아간다** — 네트워크가 필요 없다.
+건물 WiFi 는 층마다 서브넷이 갈려 있어서 11층에 올라가면 SSH 가 끊긴다.
+
 ```bash
-# 1) 로봇에서 SLAM 기동
-ros2 launch jongky_navigation bringup_navigation.launch.py mode:=slam use_rviz:=false
-
-# 2) 복도를 돌면서 강의장 앞에서 w 로 waypoint 를 찍는다
-ros2 run jongky_bringup teleop_key.py --out ~/waypoints_10f.yaml
-
-# 3) 지도 저장
-ros2 run jongky_navigation save_map.py --name fastcampus_10f
+jcheck        # 맵핑 전 점검. /map 이 없으면 주행해 봐야 안 쌓인다
+jmap 10f      # SLAM + rosbag  (터미널 1)
+jdrive 10f    # 텔레옵          (터미널 2)  ← w 로 강의장 앞 waypoint
+jsave 10f     # 지도 저장       (터미널 3)
+jstop         # 정리
 ```
+
+컨테이너를 하나만 띄우고 나머지는 거기 붙는다. 터미널마다 따로 띄우면
+장치를 서로 뺏고 `/map` 도 공유되지 않는다.
 
 층마다 따로 해야 한다. `map` 프레임은 2D 평면이라 10층과 11층을 한 지도에
 못 담는다.
+
+bag 을 같이 받는 이유는 현장이 다시 가기 비싸기 때문이다. 파라미터를 바꿔
+지도를 다시 뽑을 수 있고, 카메라 영상은 Cosmos 씨앗이 된다.
 
 ## 아직 이 런치에 없는 센서
 

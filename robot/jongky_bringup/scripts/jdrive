@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# 키보드 텔레옵. 맵핑 주행의 2번. jmap 이 먼저 떠 있어야 한다.
+#
+#   jdrive 10f
+#
+# i , j l u o   전진·후진·좌·우·전진좌·전진우
+# 스페이스      즉시 정지 (한 번 누르면 명령이 유지되므로 이걸로 세운다)
+# z x / c v     속도 / 회전 ±10%
+# w             지금 위치를 waypoint 로 저장  ← 강의장 앞에서
+# p             목록      q  종료
+set -euo pipefail
+source "$(dirname "$(readlink -f "$0")")/_common.sh"
+
+FLOOR="${1:-}"
+OUT="/host/waypoints${FLOOR:+_$FLOOR}.yaml"
+echo "waypoint → ~/waypoints${FLOOR:+_$FLOOR}.yaml"
+echo
+
+jongky_exec "$ROS_SETUP && ros2 run jongky_bringup teleop_key.py --out '$OUT' ${*:2}"
