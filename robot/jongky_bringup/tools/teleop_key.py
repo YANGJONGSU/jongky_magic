@@ -101,11 +101,20 @@ class TeleopKey(Node):
 
     def save_waypoint(self, name: str) -> bool:
         """현재 map->base_footprint 를 waypoint 로 남긴다."""
-        try:
-            tf = self._tf_buffer.lookup_transform(self._map_frame, self._base_frame, rclpy.time.Time())
-        except Exception as exc:  # TF 가 아직 없거나 SLAM 이 안 떠 있는 경우
-            print(f"\r  TF 를 못 읽었다 ({self._map_frame} -> {self._base_frame}): {exc}")
-            print("\r  SLAM 이 떠 있고 /map 이 나오는지 확인할 것")
+        # TF 가 잡힐 때까지 잠깐 기다린다. SLAM 은 로봇이 움직이기 전까지
+        # map 프레임을 늦게 만드는 경우가 있어, 한 번만 조회하면 실패한다.
+        tf = None
+        for _ in range(30):                      # 최대 약 3초
+            try:
+                tf = self._tf_buffer.lookup_transform(
+                    self._map_frame, self._base_frame, rclpy.time.Time()
+                )
+                break
+            except Exception:
+                rclpy.spin_once(self, timeout_sec=0.1)
+        if tf is None:
+            print(f"\r  TF 를 못 읽었다 ({self._map_frame} -> {self._base_frame})")
+            print("\r  로봇을 조금 움직인 뒤 다시 w 를 눌러 볼 것 (SLAM 이 map 을 만들어야 한다)")
             return False
 
         t, r = tf.transform.translation, tf.transform.rotation
