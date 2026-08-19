@@ -1,15 +1,27 @@
 #!/usr/bin/env bash
 # 맵핑 시작 전 점검. 여기서 /map 이 없으면 주행해 봐야 지도가 안 쌓인다.
-set -euo pipefail
+#
+# 확인하는 것
+#   토픽·발행률          라이다와 구동계가 살아 있나
+#   map -> base_footprint  w 키가 waypoint 를 저장할 때 읽는 TF
+#   ekf_filter_node      odom -> base_footprint 의 주인. 없으면 아무도 안 낸다
+#   odom_imu_watch       로봇이 밀리는 사고를 잡아 주는 노드.
+#                        이게 죽어 있으면 "경고가 없다" 가 "안전하다" 를 뜻하지 않는다
+set -uo pipefail
 source "$(dirname "$(readlink -f "$0")")/_common.sh"
 
 jongky_exec "$ROS_SETUP && \
   echo '=== 토픽 ===' && \
-  for t in /scan /odom /map /cmd_vel; do \
+  for t in /scan /odom /map /cmd_vel /odometry/filtered; do \
     if ros2 topic list 2>/dev/null | grep -qx \$t; then echo \"  \$t 있음\"; else echo \"  \$t 없음  <-- 문제\"; fi; \
   done && \
+  echo '=== 노드 ===' && \
+  for n in /ekf_filter_node /odom_imu_watch /slam_toolbox; do \
+    if ros2 node list 2>/dev/null | grep -qx \$n; then echo \"  \$n 있음\"; else echo \"  \$n 없음  <-- 문제\"; fi; \
+  done && \
   echo '=== 발행률 ===' && \
-  timeout 6 ros2 topic hz /scan 2>/dev/null | head -2 && \
-  timeout 6 ros2 topic hz /odom 2>/dev/null | head -2 && \
+  timeout 6 ros2 topic hz /scan 2>/dev/null | head -2; \
+  timeout 6 ros2 topic hz /odom 2>/dev/null | head -2; \
+  timeout 6 ros2 topic hz /odometry/filtered 2>/dev/null | head -2; \
   echo '=== map -> base_footprint TF (w 키가 이걸 읽는다) ===' && \
   timeout 8 ros2 run tf2_ros tf2_echo map base_footprint 2>&1 | head -4"
