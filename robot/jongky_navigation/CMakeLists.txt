@@ -15,6 +15,7 @@ install(
 install(
   PROGRAMS
   tools/save_map.py
+  tools/tf_filter.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
