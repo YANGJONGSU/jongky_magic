@@ -1,0 +1,53 @@
+# robot_localization EKF — 엔코더와 자이로를 각자 잘하는 것만 맡긴다.
+#
+# 엔코더는 전진 거리를 잘 재고 회전을 못 본다. 좌우 반지름이 0.22% 다른 걸
+# 각도로만 재기 때문이다. 자이로는 회전을 잘 잰다. 그래서 오도메트리에서는
+# vx 만, IMU 에서는 vyaw 만 가져온다. 둘 다 yaw 를 넣으면 서로 싸운다.
+#
+# world_frame 이 map 이 아니라 odom 인 이유: EKF 를 map 으로 돌리면
+# slam_toolbox 와 map->odom 을 두고 다툰다. bag 에 녹화된 map->odom 이
+# 같은 사고를 냈고 그게 지도가 겹쳐 그려진 원인이었다 (tf_filter.py 참조).
+# EKF 는 odom 레벨에서 오도메트리를 좋게 만들고, 전역 정합은 SLAM 에 맡긴다.
+
+ekf_filter_node:
+  ros__parameters:
+    frequency: 30.0
+    sensor_timeout: 0.2
+    two_d_mode: true                 # 2D 로봇. z/roll/pitch 를 아예 안 푼다
+    publish_tf: true
+    print_diagnostics: true
+
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base_footprint  # base_link 아님 — 종키 루트는 접지면이다
+    world_frame: odom
+
+    # ── 오도메트리: 전진 속도만 ─────────────────────────────────
+    # 순서: x y z / roll pitch yaw / vx vy vz / vroll vpitch vyaw / ax ay az
+    odom0: /odom
+    odom0_config: [false, false, false,
+                   false, false, false,
+                   true,  false, false,
+                   false, false, false,
+                   false, false, false]
+    odom0_differential: false
+    odom0_relative: false
+    odom0_queue_size: 10
+
+    # ── IMU: yaw 각속도만 ───────────────────────────────────────
+    # 자세(orientation)는 안 쓴다. 보드가 자기 자이로로 적분한 값이고,
+    # imu_relay.py 가 그 공분산을 -1(측정 없음)로 표시해 내보낸다.
+    #
+    # 스케일 보정은 안 건다. 계획서의 1.047 은 10층 bag 회전 이벤트 40개
+    # 적분 비교에서 1.0098 (95% 구간 0.9983~1.0211) 로 나와 지지되지 않는다.
+    # 공분산 8.182e-05 는 정지 구간 실측 분산 2.727e-05 에 3배 여유를 준 값.
+    imu0: /imu/data_corrected
+    imu0_config: [false, false, false,
+                  false, false, false,
+                  false, false, false,
+                  false, false, true,
+                  false, false, false]
+    imu0_differential: false
+    imu0_relative: false
+    imu0_remove_gravitational_acceleration: true
+    imu0_queue_size: 10
