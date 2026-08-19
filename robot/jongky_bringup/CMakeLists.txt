@@ -11,6 +11,7 @@ install(
 install(
   PROGRAMS
   tools/teleop_key.py
+  tools/odom_imu_watch.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -47,6 +47,7 @@ import tty
 import rclpy
 import yaml
 from geometry_msgs.msg import TwistStamped
+from std_msgs.msg import String
 from rclpy.node import Node
 from rclpy.qos import QoSProfile
 from tf2_ros import Buffer, TransformListener
@@ -76,6 +77,14 @@ class TeleopKey(Node):
     def __init__(self, speed: float, turn: float, out_path: str, map_frame: str, base_frame: str):
         super().__init__("jongky_teleop_key")
         self._pub = self.create_publisher(TwistStamped, "/cmd_vel", QoSProfile(depth=10))
+
+        # 바퀴와 자이로가 어긋나면 odom_imu_watch 가 알려준다. 운전 중에는
+        # jmap 터미널을 못 보므로 여기로도 띄운다 — 그 순간 알아야 되돌아가
+        # 다시 지나갈 수 있다. 나중에 재처리해서 알면 이미 늦는다.
+        self._alerts: list = []
+        self.create_subscription(
+            String, "/mapping_alert",
+            lambda m: self._alerts.append(m.data), QoSProfile(depth=10))
         self._speed = speed
         self._turn = turn
         self._out_path = os.path.expanduser(out_path)
@@ -175,6 +184,12 @@ def main() -> None:
 
     try:
         while rclpy.ok():
+            # 어긋남 경고를 운전 화면에 띄운다. 놓치면 안 되는 정보라
+            # 눈에 띄게 찍고, 그 자리에서 되돌아갈지 판단하게 한다.
+            while node._alerts:
+                print("\r  [!] 로봇이 밀렸거나 바퀴가 헛돌았다 — " + node._alerts.pop(0))
+                print("\r      그 구간을 다시 지나가 루프를 닫아 두는 편이 안전하다")
+
             key = read_key()
 
             if key == "q":

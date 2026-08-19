@@ -38,6 +38,7 @@ def generate_launch_description():
     use_rviz = LaunchConfiguration('use_rviz')
     use_lidar = LaunchConfiguration('use_lidar')
     use_ekf = LaunchConfiguration('use_ekf')
+    use_watchdog = LaunchConfiguration('use_watchdog')
     serial_port = LaunchConfiguration('serial_port')
     lidar_port = LaunchConfiguration('lidar_port')
 
@@ -73,6 +74,16 @@ def generate_launch_description():
         condition=UnlessCondition(use_ekf),
     )
 
+    # 바퀴와 자이로가 어긋나는 순간을 잡는다. 10층 1차 촬영에서 지도를 틀어놓은
+    # 사건(545초 29도 · 700~740초 최대 209도)이 현장에서는 아무 티도 안 났다.
+    watch = Node(
+        package='jongky_bringup',
+        executable='odom_imu_watch.py',
+        name='odom_imu_watch',
+        output='screen',
+        condition=IfCondition(use_watchdog),
+    )
+
     lidar = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(bringup_pkg, 'launch', 'lidar.launch.py')),
@@ -81,6 +92,10 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument(
+            'use_watchdog', default_value='true',
+            description='바퀴와 자이로의 회전 불일치를 감시하고 /mapping_alert 로 알린다',
+        ),
         DeclareLaunchArgument(
             'use_ekf', default_value='true',
             description=('robot_localization EKF 로 오도메트리 + 자이로를 융합한다. '
@@ -112,5 +127,6 @@ def generate_launch_description():
         control,
         ekf,
         ekf_off_warning,
+        watch,
         lidar,
     ])
