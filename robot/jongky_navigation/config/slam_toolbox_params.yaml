@@ -72,7 +72,21 @@ slam_toolbox:
 
     # ── 스캔 매처 페널티 계수 ───────────────────────────────────────────────────
     distance_variance_penalty: 0.5
-    angle_variance_penalty: 1.0
+    # 각도 벌점. 후보 자세의 각도가 예측(오도메트리+EKF)에서 멀수록 깎는다.
+    # 값이 크면 예측 각도를 더 붙들고 간다 — 스캔 매처가 덜 흔들린다.
+    #
+    # 10층 bag 으로 9판을 돌려 잡은 값이다 (2026-08-19). 복도 폭 1.6~1.8m 대역
+    # 비율(줄자 실측 1.68~1.70m 과 직접 대조되는 유일한 지표):
+    #
+    #   0.5 -> 13.4%   1.0 -> 13.1%   2.0 -> 18.7%   3.0 -> 9.1%
+    #
+    # 2.0 에서 1.4~1.6m 구간이 단 1개로 비면서 이봉 구조(개방 1.68 / 사물함 1.20)가
+    # 가장 선명해진다. 3.0 은 넘어가 봉우리가 무너진다.
+    #
+    # 같이 시험한 correlation_search_space_dimension 2.5 ·
+    # minimum_travel_heading 0.20 · link_match_minimum_response_fine 0.40/0.55 는
+    # 전부 기준값이 낫거나 차이가 없었다. 2.0 과 2.5 를 합치면 오히려 나빠진다.
+    angle_variance_penalty: 2.0
     fine_search_angle_offset: 0.00349
     coarse_search_angle_offset: 0.349
     coarse_angle_resolution: 0.0349
