@@ -11,7 +11,12 @@
 
 ekf_filter_node:
   ros__parameters:
-    frequency: 30.0
+    # 20 Hz. 스캔이 10 Hz 이므로 두 배이고, 0.4 m/s 로 도는 로봇에는 충분하다.
+    #
+    # 30 으로 뒀을 때 실차 전체 스택 기동 직후 "Failed to meet update rate" 가
+    # 두 번 났다 (0.33s / 0.14s). 정상 운전에 들어가면 사라지지만, 현장에서는
+    # 여기에 카메라 32MB/s 와 20GB bag 기록이 더 얹힌다. 여유를 두는 편이 낫다.
+    frequency: 20.0
     sensor_timeout: 0.2
     two_d_mode: true                 # 2D 로봇. z/roll/pitch 를 아예 안 푼다
     publish_tf: true
