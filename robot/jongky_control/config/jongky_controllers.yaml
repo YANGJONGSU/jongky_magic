@@ -26,11 +26,20 @@ imu_sensor_broadcaster:
   ros__parameters:
     sensor_name: imu_sensor
     frame_id: imu_link
-    # 보드가 공분산을 안 주므로 0 으로 둔다. 센서 퓨전을 붙일 때
-    # 실측 잡음으로 채울 것.
-    static_covariance_orientation:         [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    static_covariance_angular_velocity:    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    static_covariance_linear_acceleration: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    # 보드는 공분산을 안 준다. 아래 값은 10층 촬영 bag(10f_0818_2246)의 정지
+    # 구간에서 잰 것이다 — 오도메트리 속도가 0인 13개 구간, 186.5초, 9,174 표본.
+    # 모터가 켜진 실제 주행 조건이라 책상 위에서 재는 것보다 운용 상태에 가깝다.
+    # 정지 잡음은 하한이므로 실측 분산에 3배 여유를 뒀다.
+    #
+    # 자이로 세 축 모두 분산이 2.5~2.7e-05 로 일관되고 편향은 4e-05 rad/s 미만이다.
+    # (한 구간은 뺐다 — 700~740초 사이 바퀴가 안 도는 채로 로봇이 돌아가서
+    #  정지가 아니었다. 그 구간만 넣으면 분산이 만 배로 뛴다.)
+    #
+    # orientation 은 -1 로 둔다. 보드가 자기 자이로로 적분한 자세라 같은 스케일
+    # 오차를 물고 있고, EKF 는 각속도만 쓴다. -1 은 "이 측정은 없다"는 REP 규약이다.
+    static_covariance_orientation:         [-1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    static_covariance_angular_velocity:    [7.994e-05, 0.0, 0.0, 0.0, 7.564e-05, 0.0, 0.0, 0.0, 8.182e-05]
+    static_covariance_linear_acceleration: [2.388e-02, 0.0, 0.0, 0.0, 3.332e-02, 0.0, 0.0, 0.0, 1.605e-02]
 
 
 diff_drive_controller:

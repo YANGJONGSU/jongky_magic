@@ -16,6 +16,7 @@ install(
   PROGRAMS
   tools/save_map.py
   tools/tf_filter.py
+  tools/imu_relay.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
