@@ -74,7 +74,15 @@ diff_drive_controller:
     # 바퀴축 높이(33.5mm)를 기준으로 잡혀 지도가 그만큼 뜬다.
     base_frame_id: base_footprint
     odom_frame_id: odom
-    enable_odom_tf: true
+    # false 다 — odom -> base_footprint 의 주인은 robot_localization EKF 다
+    # (robot.launch.py 가 띄운다. 설계 의도는 같은 폴더의 ekf.yaml).
+    # 둘 다 켜면 같은 변환을 두 노드가 동시에 쏘고, TF 버퍼는 마지막에 들어온 걸
+    # 쓰므로 두 추정이 번갈아 이긴다. 에러는 한 줄도 안 난다 — bag 재생에서
+    # 지도를 두 겹으로 그리게 만든 사고가 정확히 이 구조였다.
+    #
+    # EKF 를 끄려면(use_ekf:=false) 이 값을 true 로 되돌려야 한다. 안 그러면
+    # 그 TF 를 아무도 안 낸다.
+    enable_odom_tf: false
 
     # 엔코더가 있으므로 위치 피드백을 쓴다. open_loop 로 두면
     # 명령값을 그대로 오도메트리로 적분해 실제 주행과 어긋난다.

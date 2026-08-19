@@ -41,7 +41,13 @@ ekf_filter_node:
     # 스케일 보정은 안 건다. 계획서의 1.047 은 10층 bag 회전 이벤트 40개
     # 적분 비교에서 1.0098 (95% 구간 0.9983~1.0211) 로 나와 지지되지 않는다.
     # 공분산 8.182e-05 는 정지 구간 실측 분산 2.727e-05 에 3배 여유를 준 값.
-    imu0: /imu/data_corrected
+    # 실차 기준 토픽. 보드가 내는 /imu/data 에는 imu_sensor_broadcaster 가
+    # 실측 공분산을 이미 채워 넣는다 (jongky_controllers.yaml).
+    #
+    # bag 재생에서는 다르다 — 이미 찍힌 bag 은 공분산이 전부 0 이라
+    # imu_relay.py 가 채워 낸 /imu/data_corrected 를 써야 한다. 재생 스크립트가
+    # `-p imu0:=/imu/data_corrected` 로 덮어쓴다.
+    imu0: /imu/data
     imu0_config: [false, false, false,
                   false, false, false,
                   false, false, false,

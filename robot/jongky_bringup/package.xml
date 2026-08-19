@@ -9,6 +9,7 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <exec_depend>jongky_control</exec_depend>
+  <exec_depend>robot_localization</exec_depend>
   <exec_depend>jongky_description</exec_depend>
 
   <!-- 라이다. apt 판이 아니라 소스 빌드본이다 (robot/jongky_robot.repos).

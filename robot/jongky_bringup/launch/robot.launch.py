@@ -12,7 +12,8 @@
   ros2 launch jongky_bringup robot.launch.py use_lidar:=false
 
 올라오는 것
-  /joint_states  /odom  /imu/data  /scan  TF(odom -> base_footprint -> ...)
+  /joint_states  /odom  /imu/data  /scan  /odometry/filtered
+  TF(odom -> base_footprint -> ...)  ← odom->base_footprint 는 EKF 가 낸다
 
 아직 없는 것
   아스트라(astra_camera)가 이미지에 없다. IMX219 는 /dev/video* 자체가
@@ -22,10 +23,11 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.conditions import IfCondition
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration
+from launch_ros.actions import Node
 
 
 def generate_launch_description():
@@ -35,6 +37,7 @@ def generate_launch_description():
     use_mock = LaunchConfiguration('use_mock')
     use_rviz = LaunchConfiguration('use_rviz')
     use_lidar = LaunchConfiguration('use_lidar')
+    use_ekf = LaunchConfiguration('use_ekf')
     serial_port = LaunchConfiguration('serial_port')
     lidar_port = LaunchConfiguration('lidar_port')
 
@@ -48,6 +51,28 @@ def generate_launch_description():
         }.items(),
     )
 
+    # 엔코더의 전진 거리와 자이로의 회전을 융합한다. 설계 의도는 ekf.yaml 참조.
+    #
+    # **이 노드가 odom -> base_footprint 의 주인이다.** 그래서
+    # jongky_controllers.yaml 의 enable_odom_tf 가 false 다. EKF 를 끄면 그 TF 를
+    #아무도 안 내고, 증상은 "노드는 다 떴는데 아무것도 안 움직인다" 로 나온다 —
+    # 원인을 전혀 안 알려주는 종류다. 아래 경고가 그래서 있다.
+    ekf = Node(
+        package='robot_localization',
+        executable='ekf_node',
+        name='ekf_filter_node',
+        output='screen',
+        parameters=[os.path.join(ctrl_pkg, 'config', 'ekf.yaml')],
+        condition=IfCondition(use_ekf),
+    )
+
+    ekf_off_warning = LogInfo(
+        msg=('[경고] use_ekf:=false 다. odom -> base_footprint 를 낼 노드가 없다. '
+             'jongky_control/config/jongky_controllers.yaml 의 '
+             'enable_odom_tf 를 true 로 되돌려야 주행한다.'),
+        condition=UnlessCondition(use_ekf),
+    )
+
     lidar = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(bringup_pkg, 'launch', 'lidar.launch.py')),
@@ -56,6 +81,11 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument(
+            'use_ekf', default_value='true',
+            description=('robot_localization EKF 로 오도메트리 + 자이로를 융합한다. '
+                         'false 로 두면 enable_odom_tf 도 함께 되돌려야 한다'),
+        ),
         DeclareLaunchArgument(
             'use_mock', default_value='false',
             description='true 면 목업 하드웨어. 보드 없이 돌려볼 때'),
@@ -80,5 +110,7 @@ def generate_launch_description():
             description='라이다 포트. 기본값은 $JONGKY_LIDAR_PORT'),
 
         control,
+        ekf,
+        ekf_off_warning,
         lidar,
     ])
