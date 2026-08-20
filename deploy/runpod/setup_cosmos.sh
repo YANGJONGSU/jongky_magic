@@ -101,7 +101,11 @@ say "torch $TORCH_V (cu121) · numpy<2 로 맞춘다"
 "$PY" -m pip install --no-input -q \
   "torch==$TORCH_V" "torchvision==$TV_V" "torchaudio==$TA_V" --index-url "$CU_IDX" \
   || die "torch 설치 실패"
-"$PY" -m pip install --no-input -q "numpy<2" || die "numpy 고정 실패"
+# opencv-python 5.0 은 numpy>=2 로 빌드돼서 numpy 1.x 위에서는 배열을 주고받을
+# 때 깨진다. import 는 통과하므로 눈에 안 띈다 — mmgp 와 같은 모양이다.
+# 4.x 는 numpy 1.x 와 맞는다.
+"$PY" -m pip install --no-input -q "numpy<2" "opencv-python<5" \
+  || die "numpy/opencv 고정 실패"
 
 # 올린 조합이 실제로 쓸 수 있는지: 할당 + mmgp 가 필요로 하는 dtype
 "$PY" - <<'PYEOF' || die "torch 를 올렸는데도 조건을 못 맞춘다"
@@ -116,7 +120,7 @@ PYEOF
 # 의존성으로 torch 나 numpy 를 다시 움직이면 방금 맞춘 게 도로 깨진다.
 "$PY" - > "$CONS" <<'PYEOF'
 import importlib.metadata as md
-for p in ("torch", "torchvision", "torchaudio", "numpy"):
+for p in ("torch", "torchvision", "torchaudio", "numpy", "opencv-python"):
     try: print("%s==%s" % (p, md.version(p)))
     except md.PackageNotFoundError: pass
 PYEOF
@@ -208,6 +212,14 @@ for m in ("torch", "numpy", "transformers", "optimum.quanto", "gradio",
 # gradio_server_v2w.py 17번 줄과 같은 import
 from mmgp import offload, profile_type
 print("  ok mmgp.offload / profile_type")
+
+# import 만으로는 부족하다. numpy ABI 가 어긋난 확장 모듈은 import 는 통과하고
+# 배열을 실제로 주고받을 때 죽는다. 그래서 왕복을 시켜본다.
+import numpy as np, cv2, torch
+a = np.zeros((8, 8, 3), np.uint8)
+assert cv2.cvtColor(a, cv2.COLOR_RGB2BGR).shape == (8, 8, 3)
+assert torch.from_numpy(a).numpy().shape == (8, 8, 3)
+print("  ok numpy 왕복 (cv2 · torch)")
 PYEOF
 
 echo
