@@ -118,28 +118,48 @@ say "torch $TORCH_V (cu121) 설치"
 # · torch 3종  : 방금 넣은 그 버전 그대로
 # · numpy<2    : 이 torch 는 numpy 1.x 로 빌드됐다. 2.x 면 `_ARRAY_API not found`
 # · opencv<5   : 5.0 은 numpy>=2 로 빌드돼서 배열을 주고받을 때 깨진다
-# · quanto 0.2.7: 그 이후 판은 state_dict 에서 `weight_qtype` 을 pop 하는데
-#                 이 체크포인트에는 그 키가 없다 (`weight._data`/`_scale` 형식)
+# · quanto 0.2.6: 0.2.7 은 `torch>=2.6.0` 이라 2.4.1 과 같이 못 쓴다.
+#                 그리고 파드에 깔려 있던 판은 state_dict 에서
+#                 `weight_qtype` 을 pop 하는데 이 체크포인트에는 그 키가 없다
+#                 (`weight._data` I8 + `weight._scale` F32 형식).
+#                 pypi 의 0.2.4~0.2.7 중 그렇게 하는 판은 없다 — dist-info 는
+#                 0.2.7 이라고 적혀 있는데 파일 내용이 달랐다. 그래서 버전
+#                 표기를 믿지 않고 --force-reinstall 로 파일을 덮어쓴다.
 "$PY" - > "$CONS" <<'PYEOF'
 import importlib.metadata as md
 for p in ("torch", "torchvision", "torchaudio"):
     print("%s==%s" % (p, md.version(p)))
 print("numpy<2")
 print("opencv-python<5")
-print("optimum-quanto==0.2.7")
+print("optimum-quanto==0.2.6")
 PYEOF
 say "고정:"; sed 's/^/    /' "$CONS"
 PIP=( "$PY" -m pip install --no-input -c "$CONS" )
 
 # ── 4c. 나머지를 제약 아래에서 ──────────────────────────────────────────────
-"${PIP[@]}" -q "numpy<2" "opencv-python<5" "optimum-quanto==0.2.7" \
-  || die "numpy/opencv/quanto 설치 실패"
+"${PIP[@]}" -q "numpy<2" "opencv-python<5" || die "numpy/opencv 설치 실패"
+# quanto 는 --force-reinstall 로 파일을 갈아엎는다. 버전 표기가 맞는데 내용이
+# 다른 상태였기 때문에, 보통 설치는 "이미 0.2.x 있음" 으로 건너뛴다.
+# --no-deps 를 붙이는 이유는 이 호출이 torch 를 다시 건드리지 못하게 하기 위함이다.
+"$PY" -m pip install --no-input -q --force-reinstall --no-deps \
+  "optimum-quanto==0.2.6" || die "quanto 설치 실패"
 
 # 이 조합이 실제로 쓸 수 있는지: 할당 + mmgp 가 필요로 하는 dtype
 "$PY" - <<'PYEOF' || die "고정한 조합이 GPU 에서 안 돈다 — 위 traceback 을 그대로 가져올 것"
-import torch, numpy
+import torch, numpy, inspect
+import importlib.metadata as md
 assert hasattr(torch, "uint16"), "torch.uint16 이 없다 — mmgp 가 이걸 쓴다"
 assert numpy.__version__.startswith("1."), "numpy 가 2.x 다: " + numpy.__version__
+# 버전 문자열이 아니라 **실제 코드**를 본다. 파드에 0.2.7 이라고 적혀 있으면서
+# 내용이 다른 판이 깔려 있었다.
+import optimum.quanto.nn.qmodule as _q
+src = inspect.getsource(_q.QModuleMixin._load_from_state_dict)
+bad = 'state_dict.pop(prefix + "weight_qtype")'
+print("  optimum-quanto", md.version("optimum-quanto"),
+      "· weight_qtype pop:", bad in src)
+assert bad not in src, (
+    "이 quanto 판은 state_dict 에서 weight_qtype 을 요구한다. "
+    "체크포인트에는 그 키가 없다.")
 x = torch.randn(2000, 2000, device="cuda")
 print("  torch", torch.__version__, "· numpy", numpy.__version__, "· 할당 OK")
 PYEOF
