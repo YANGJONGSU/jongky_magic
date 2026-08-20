@@ -112,7 +112,13 @@ class FakeIsaacEnv:
 
     def _get_observations(self):
         ep, t = self._rendered
-        return {"policy": FakeTensor(encode(ep, t)), "critic": None}
+        # critic 은 [dist, sin, cos, v, omega] 5차원이다. dreamer_env 가 뒤 두
+        # 개(v, omega)를 proprio 로 슬라이스한다. 프레임 값에서 만들어 두면
+        # 스냅샷이 뒤바뀌었을 때 proprio 도 같이 틀어져서 시험이 잡아낸다.
+        return {
+            "policy": FakeTensor(encode(ep, t)),
+            "critic": FakeTensor(np.array([[3.0, 0.0, 1.0, 0.01 * t, 0.001 * ep]])),
+        }
 
     def _reset_idx(self, env_ids):
         self.reset_idx_calls += 1
@@ -155,7 +161,17 @@ def install_stubs(env_factory):
     mod = types.ModuleType("jongky_corridor_env")
     mod.JongkyCorridorEnvCfg = FakeCfg
     mod.JongkyCorridorEnv = env_factory
+    # dreamer_env 가 proprio 를 [-1,1] 로 정규화할 때 쓴다. 실제 값과 같게 둔다.
+    mod.V_MAX = 0.40
+    mod.OMEGA_MAX = 1.50
     sys.modules["jongky_corridor_env"] = mod
+
+    # 지도 env 는 이 시험의 관심사가 아니다 (리셋 경계만 본다). dreamer_env 가
+    # 기본값으로 그쪽을 고르므로 같은 가짜를 물려 준다.
+    mapmod = types.ModuleType("jongky_map_corridor_env")
+    mapmod.JongkyMapCorridorEnvCfg = FakeCfg
+    mapmod.JongkyMapCorridorEnv = env_factory
+    sys.modules["jongky_map_corridor_env"] = mapmod
 
     try:
         import gym  # noqa: F401

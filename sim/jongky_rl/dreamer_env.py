@@ -103,7 +103,40 @@ from __future__ import annotations
 import gym
 import numpy as np
 
-from jongky_corridor_env import JongkyCorridorEnv, JongkyCorridorEnvCfg
+from jongky_corridor_env import OMEGA_MAX, V_MAX
+
+# ── 어느 복도에서 학습할 것인가 ────────────────────────────────────────────
+#
+# "map"    실측 지도에서 뽑은 구간별 폭 (개방 1.69 / 사물함 1.20). **기본값.**
+# "scalar" 폭 2.4 m 스칼라 하나로 세우는 원래 env.
+#
+# scalar 를 남겨 둔 이유는 비교 대조군이다 — README "제자리 회전" 절의
+# "기존 2.4 m env (손 안 댐) 3.11 rad" 가 이 env 로 잰 값이고, 그게 "회전
+# 문제는 복도 폭이 아니라 로봇 동역학" 결론의 근거다.
+#
+# 기본값이 map 인 이유는 그 반대다 — 2.4 m 는 개방 구간 대비 +42%,
+# 사물함 구간 대비 +100% 로 틀린 값이고, 그게 기본값이면 아무것도 안 고친
+# 것과 같다. 실제로 이 파일이 scalar 를 하드코딩하고 있어서
+# `JONGKY_CORRIDOR_JSON=... train_dreamer.py` 가 에러 없이 2.4 m 로 돌았다.
+#
+# 임포트는 함수 안에서 한다 — 둘 다 모듈 최상단에서 isaaclab 을 끌어오므로
+# 안 쓰는 쪽까지 미리 로드할 이유가 없다.
+_ENV_KINDS = {
+    "map": ("jongky_map_corridor_env", "JongkyMapCorridorEnv", "JongkyMapCorridorEnvCfg"),
+    "scalar": ("jongky_corridor_env", "JongkyCorridorEnv", "JongkyCorridorEnvCfg"),
+}
+DEFAULT_ENV_KIND = "map"
+
+
+def resolve_env(kind: str):
+    """env 종류 이름 → (env 클래스, cfg 클래스)."""
+    import importlib
+
+    if kind not in _ENV_KINDS:
+        raise ValueError(f"env 종류는 {sorted(_ENV_KINDS)} 중 하나 — 받은 값: {kind!r}")
+    mod_name, env_name, cfg_name = _ENV_KINDS[kind]
+    mod = importlib.import_module(mod_name)
+    return getattr(mod, env_name), getattr(mod, cfg_name)
 
 
 class JongkyDreamerEnv:
@@ -111,8 +144,10 @@ class JongkyDreamerEnv:
 
     metadata = {}
 
-    def __init__(self, size: tuple[int, int] = (64, 64), **cfg_overrides):
-        cfg = JongkyCorridorEnvCfg()
+    def __init__(self, size: tuple[int, int] = (64, 64),
+                 env_kind: str = DEFAULT_ENV_KIND, **cfg_overrides):
+        env_cls, cfg_cls = resolve_env(env_kind)
+        cfg = cfg_cls()
         cfg.scene.num_envs = 1
         # dreamerv3-torch 가 uint8 을 받아 내부에서 정규화한다. 두 번 하면 안 된다.
         cfg.normalize_obs = False
@@ -127,9 +162,20 @@ class JongkyDreamerEnv:
             cfg.rerender_on_reset = True
 
         for k, v in cfg_overrides.items():
+            # cfg 는 dataclass 라 없는 이름에 setattr 을 해도 조용히 통과한다.
+            # 그러면 --geometry-json 을 scalar env 에 준 경우처럼 "인자는
+            # 먹혔는데 아무것도 안 바뀐" 상태가 된다 — 지금 고치는 버그가
+            # 정확히 그 모양이었다. 그래서 먼저 막는다.
+            if not hasattr(cfg, k):
+                raise TypeError(
+                    f"{cfg_cls.__name__} 에 '{k}' 설정이 없다 (env_kind={env_kind!r}).\n"
+                    f"  지도 형상 설정(geometry_json / corridor_s_range / width_source)은 "
+                    f"--env map 에서만 쓸 수 있다."
+                )
             setattr(cfg, k, v)
 
-        self._env = JongkyCorridorEnv(cfg)
+        self._env = env_cls(cfg)
+        self._env_kind = env_kind
         self._size = size
         self.reward_range = [-np.inf, np.inf]
 
@@ -139,7 +185,7 @@ class JongkyDreamerEnv:
         # 생긴다. 아래 두 메서드에서 리터럴로 박는다.
 
         # 에피소드 경계 방어용 상태
-        self._pre_reset_image: np.ndarray | None = None  # 리셋 직전 스냅샷
+        self._pre_reset_frame: tuple | None = None  # 리셋 직전 스냅샷 (이미지, proprio)
         self._reset_idx_fired = False                    # 이번 step 에서 자동 리셋이 돌았나
         self.autoreset_detected: bool | None = None      # 진단용 (None = 아직 모름)
         self._hook_installed = self._install_pre_reset_hook()
@@ -164,9 +210,9 @@ class JongkyDreamerEnv:
             # 카메라 애노테이터를 읽을 뿐 상태를 바꾸지 않으므로 안전하다.
             # (에피소드당 1회라 비용도 무시할 수 있다)
             try:
-                self._pre_reset_image = self._image(env._get_observations())
+                self._pre_reset_frame = self._frame(env._get_observations())
             except Exception as exc:  # 관측을 못 떠도 학습을 멈추지는 않는다
-                self._pre_reset_image = None
+                self._pre_reset_frame = None
                 print(f"[dreamer_env] 경고: 리셋 직전 관측 스냅샷 실패 — {exc}")
             self._reset_idx_fired = True
             return inner(env_ids, *args, **kwargs)
@@ -182,12 +228,44 @@ class JongkyDreamerEnv:
             return False
         return True
 
+    # ── 속 env 접근 ───────────────────────────────────────────────────────
+    # check_reachable 이 목표 범위를 **클래스 기본값이 아니라 인스턴스에서**
+    # 읽어야 한다. 지도 env 는 __init__ 에서 복도 길이에 맞춰 goal_x_range 를
+    # 런타임에 좁힌다. 이름을 unwrapped 로 하지 않는다 — gym 래퍼 프로토콜과
+    # 겹쳐서 dreamerv3-torch 의 래퍼가 잘못 물릴 수 있다.
+    @property
+    def isaac_env(self):
+        return self._env
+
+    @property
+    def env_cfg(self):
+        return self._env.cfg
+
+    @property
+    def env_kind(self) -> str:
+        return self._env_kind
+
     # ── space ─────────────────────────────────────────────────────────────
     @property
     def observation_space(self):
         return gym.spaces.Dict(
             {
                 "image": gym.spaces.Box(0, 255, self._size + (3,), dtype=np.uint8),
+                # 자기 속도 [v/V_MAX, omega/OMEGA_MAX].
+                #
+                # **목표 정보가 아니라 자기 상태다.** 실차에서는 EKF 의
+                # /odometry/filtered 에서 그대로 나온다 (엔코더 vx + 자이로
+                # vyaw, 20Hz). AMCL 도 지도도 웨이포인트도 필요 없다.
+                #
+                # 넣는 이유: _pre_physics_step 이 가속 램프를 걸어서 실제 v 가
+                # 명령 이력의 함수인데 64x64 한 장에는 그 정보가 없다.
+                #
+                # **dist/bearing 을 여기 같이 넣지 말 것.** 그건 AMCL 이 있어야
+                # 나오고, 넣으면 태스크가 벡터만으로 풀려서 CNN 가지가 목표를
+                # 학습할 이유가 사라진다 — 마커 없는 실물로 전이가 0 이 된다.
+                # 그런데 시뮬 지표로는 그 사실을 알 수가 없다 (학습은 오히려
+                # 더 빨리 붙는다).
+                "proprio": gym.spaces.Box(-1.0, 1.0, (2,), dtype=np.float32),
                 "is_first": gym.spaces.Box(0, 1, (1,), dtype=np.uint8),
                 "is_terminal": gym.spaces.Box(0, 1, (1,), dtype=np.uint8),
             }
@@ -206,9 +284,26 @@ class JongkyDreamerEnv:
         img = obs_dict["policy"][0].detach().cpu().numpy()
         return img.astype(np.uint8)
 
-    def _obs(self, image: np.ndarray, is_first: bool, is_terminal: bool) -> dict:
+    def _proprio(self, obs_dict) -> np.ndarray:
+        # _compute_state() 는 [dist, sin(bearing), cos(bearing), v, omega] 를
+        # 준다. **뒤 두 개만** 쓴다. 앞 세 개를 왜 안 쓰는지는
+        # observation_space 주석 참조.
+        #
+        # V_MAX/OMEGA_MAX 로 나눠 [-1,1] 에 넣는다. 인코더가 symlog_inputs 라
+        # 스케일이 커도 죽지는 않지만, symlog 가 [-1,1] 근처에서 선형이라
+        # 여기 맞춰 두는 편이 낫다.
+        s = obs_dict["critic"][0, 3:5].detach().cpu().numpy()
+        return (s / np.array([V_MAX, OMEGA_MAX], dtype=np.float32)).astype(np.float32)
+
+    def _frame(self, obs_dict) -> tuple[np.ndarray, np.ndarray]:
+        """관측 한 장 = (이미지, proprio). 리셋 스냅샷도 이 짝으로 뜬다."""
+        return self._image(obs_dict), self._proprio(obs_dict)
+
+    def _obs(self, frame, is_first: bool, is_terminal: bool) -> dict:
+        image, proprio = frame
         return {
             "image": image,
+            "proprio": proprio,
             "is_first": is_first,
             "is_terminal": is_terminal,
         }
@@ -225,7 +320,7 @@ class JongkyDreamerEnv:
         # 드라이버가 done 뒤에 여기를 부른다. Isaac 은 이미 자동 리셋을 했지만
         # 한 번 더 리셋한다 — 파일 상단 "[리셋 2회에 대하여]" 참조.
         self._reset_idx_fired = False
-        self._pre_reset_image = None
+        self._pre_reset_frame = None
 
         obs_dict, _ = self._env.reset()
 
@@ -246,9 +341,9 @@ class JongkyDreamerEnv:
         # 마지막 프레임이므로 여기서 버린다. 안 버리면 다음 종료 스텝이
         # 남은 찌꺼기를 쓸 수 있다.
         self._reset_idx_fired = False
-        self._pre_reset_image = None
+        self._pre_reset_frame = None
 
-        return self._obs(self._image(obs_dict), is_first=True, is_terminal=False)
+        return self._obs(self._frame(obs_dict), is_first=True, is_terminal=False)
 
     def step(self, action):
         import torch
@@ -258,7 +353,7 @@ class JongkyDreamerEnv:
         )
 
         self._reset_idx_fired = False
-        self._pre_reset_image = None
+        self._pre_reset_frame = None
 
         obs_dict, rew, terminated, truncated, _ = self._env.step(act)
 
@@ -270,10 +365,10 @@ class JongkyDreamerEnv:
         # 리셋 직전에 떠 둔 스냅샷으로 갈아끼운다. 스냅샷이 없으면(훅 실패,
         # 혹은 자동 리셋을 안 하는 구현이면) Isaac 관측이 곧 종료 관측이므로
         # 그대로 쓴다 — 어느 쪽이든 안전하다.
-        if done and self._reset_idx_fired and self._pre_reset_image is not None:
-            image = self._pre_reset_image
+        if done and self._reset_idx_fired and self._pre_reset_frame is not None:
+            frame = self._pre_reset_frame
         else:
-            image = self._image(obs_dict)
+            frame = self._frame(obs_dict)
 
         if done and self.autoreset_detected is None:
             # 첫 에피소드 끝에서 한 번만, 자동 리셋이 실제로 도는지 남긴다.
@@ -289,7 +384,7 @@ class JongkyDreamerEnv:
         # 한다 — 시간이 다 됐다고 해서 그 상태의 가치가 0 인 것은 아니기 때문이다.
         # 여기를 뭉뚱그리면 크리틱이 에피소드 끝을 전부 실패로 배운다.
         # (models.py:191 에서 cont = 1 - is_terminal 로 continuation head 를 학습한다)
-        obs = self._obs(image, is_first=False, is_terminal=term)
+        obs = self._obs(frame, is_first=False, is_terminal=term)
         return obs, float(rew[0].item()), done, {}
 
     def close(self):

@@ -23,7 +23,11 @@ train_dreamer.py           DreamerV3 학습 진입점
 ```bash
 # 1) xacro 를 평문 URDF 로. 최상위는 robot.urdf.xacro 다.
 #    jongky.urdf.xacro 는 매크로 정의만 있어 빈 <robot> 이 나온다.
-xacro robot/jongky_description/urdf/robot.urdf.xacro use_mock:=true > jongky.urdf
+#    **is_sim:=true 를 반드시 붙일 것** — 이게 캐스터를 스위블+롤 관절로
+#    펼친다. 빼면 캐스터가 base_link 의 고정 충돌 구슬로 남아 제자리 회전이
+#    안 된다 (아래 "캐스터" 절).
+xacro robot/jongky_description/urdf/robot.urdf.xacro \
+      is_sim:=true use_mock:=true > jongky.urdf
 
 # 2) package:// 참조를 상대경로로 바꾸고 STL 을 같이 둔다
 sed -i 's|package://jongky_description/meshes/|meshes/|g' jongky.urdf
@@ -33,8 +37,19 @@ cd ~/isaac/IsaacLab
 OMNI_KIT_ACCEPT_EULA=YES ~/isaac/env_isaaclab/bin/python \
   scripts/tools/convert_urdf.py ~/jongky_usd/jongky.urdf ~/jongky_usd_merged/jongky.usd \
   --merge-joints --joint-target-type velocity \
-  --joint-stiffness 0.0 --joint-damping 100.0 --headless
+  --joint-stiffness 0.0 --joint-damping 0.0 --headless
 ```
+
+> ### `--joint-damping` 은 0.0 이어야 한다
+>
+> 예전에 100.0 이었다. 그 값은 **모든 관절에 일괄로** 들어간다. 캐스터는
+> 수동 관절이라 env 에 덮어쓸 액추에이터 항목이 없으므로, 100 으로 변환하면
+> 감쇠 100 에 묶여 **고치기 전의 고정 구슬과 똑같아진다.** 구동륜은 env 의
+> `ImplicitActuatorCfg(damping=2.0)` 이 어차피 다시 쓰므로 0.0 이 안전하다.
+>
+> 즉 `is_sim:=true` 와 `--joint-damping 0.0` 은 **둘 다** 있어야 한다.
+> 하나만 빠져도 캐스터 수정이 아무 효과가 없고, 그런데 에러는 안 난다.
+> `tools/check_rotation.py` 가 이 둘을 검사해서 어느 쪽이 빠졌는지 짚어 준다.
 
 > `isaaclab.sh` 는 venv 를 못 찾는다. venv 파이썬을 직접 부를 것.
 
@@ -266,9 +281,48 @@ DayDreamer 도 실물 1대로 학습했다.
 python3 map_geometry.py /root/maps_local/L10b.yaml -o corridor_L10b.json \
         --debug-png L10b_debug.png
 
-# 2) Isaac Lab 쪽에서 학습 — 기존 env 와 나란히 쓸 수 있다
-JONGKY_CORRIDOR_JSON=corridor_L10b.json python -u train_dreamer.py
+# 2) Isaac Lab 쪽에서 학습. 지도 env 가 **기본값**이다 (corridor_L10b.json)
+python -u train_dreamer.py --headless --enable_cameras
+
+# 다른 지도로. --s-range 는 기본이 auto — 지도 이름으로 학습 대역을 찾는다
+python -u train_dreamer.py --headless --enable_cameras \
+        --geometry-json corridor_L11.json
+
+# 폭 2.4 m 단일값 대조군 (아래 "제자리 회전" 절의 대조 실험용)
+python -u train_dreamer.py --headless --enable_cameras --env scalar
 ```
+
+> **예전 문서의 함정.** 여기 `JONGKY_CORRIDOR_JSON=... python train_dreamer.py`
+> 라고 적혀 있었는데, 그 환경변수는 `jongky_map_corridor_env.py` 의
+> `DEFAULT_JSON` 에서만 읽혔고 **`train_dreamer.py` 는 그 모듈을 import 하지
+> 않았다.** 그래서 저 명령은 에러 없이 폭 2.4 m 복도로 학습을 돌렸다. 지금은
+> 환경변수를 없애고 `--geometry-json` 하나로 통일했다 — `--help` 에 나오고,
+> 복도 형상이 학습 로그에 남는다.
+
+### 학습 대역은 지도마다 다르다
+
+`corridor_s_range` 기본값은 `"auto"` 이고, JSON 의 `meta.map_name` 으로
+`TRAINING_S_RANGE` 표에서 찾는다. 모르는 지도는 **에러다** — 예전 기본값
+`(13.45, 31.0)` 은 L10b 전용 수치였는데 다른 지도에도 그대로 걸려서, L11 을
+넣으면 25.5 m 중 7.65 m 만 남기고 조용히 잘랐다.
+
+고르는 기준 셋. ① 벽 뒷받침 구간만으로 끊기지 않고 이어질 것 ② **실제로
+주행하는 `x 0 ~ goal_x_range[1]`(7 m) 안에** 개방(1.69)·사물함(1.20) 대역이
+둘 다 들어올 것 ③ 가장 먼 목표 뒤로 벽이 남을 것.
+
+| 지도 | s_range | 복도 | 주행 구간(x&lt;7) 폭열 |
+|---|---|---|---|
+| L10b | 13.45 ~ 31.00 | 17.55 m | 1.40 → 1.69 → **1.20** → 2.10 |
+| L11 | 11.00 ~ 21.10 | 10.10 m | 2.14 → 1.69 → **1.20** |
+
+②가 결정적이다. L11 에서 벽 뒷받침만 보고 최장 구간을 고르면 `(4.2, 21.1)`
+인데, 주행 구간 폭열이 `1.69 → 3.40 → 3.54 → 2.14` 라 **사물함 대역을 한 번도
+못 만난다.** 로봇은 x∈[0,1] 에서 출발해 x∈[3,7] 의 목표까지만 가기 때문이다.
+
+게다가 그 3.4~3.5 m 구간(s 7.65~11.00)은 복도가 아니라 교차로다 — `2*DT`
+추정치와 레이캐스트가 0.95~0.99 m 어긋나고 구간 내 p90-p10 이 1.10 m 다
+(정상 복도 구간은 각각 0.03~0.07 m, 0.10 m). **거리변환은 열린 방에서 방
+크기를 재지 복도 폭을 재지 않는다.** 그래서 그 뒤인 s=11.00 에서 시작한다.
 
 ### 어떻게 뽑는가
 

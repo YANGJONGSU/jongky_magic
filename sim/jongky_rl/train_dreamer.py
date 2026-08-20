@@ -30,6 +30,22 @@ import sys
 
 from isaaclab.app import AppLauncher
 
+def _parse_s_range(text: str):
+    """--s-range 값: 'auto' | 'full' | 'LO:HI'"""
+    t = text.strip().lower()
+    if t == "auto":
+        return "auto"
+    if t in ("full", "all", "none"):
+        return None
+    try:
+        lo, hi = (float(v) for v in t.replace(",", ":").split(":"))
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"'auto' | 'full' | 'LO:HI' 형식 — 받은 값: {text!r}")
+    if hi <= lo:
+        raise argparse.ArgumentTypeError(f"LO < HI 여야 한다 — 받은 값: {text!r}")
+    return (lo, hi)
+
+
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 parser.add_argument("--dreamer-repo", default="~/dreamerv3-torch")
 parser.add_argument("--logdir", default="~/jongky_dreamer_runs/corridor")
@@ -39,6 +55,27 @@ parser.add_argument(
     "--episode-steps", type=int, default=600,
     help="에피소드 길이(env 스텝, 30Hz). 기본 600 = 20초. configs.yaml 의 --time_limit 은 "
          "여기서 덮어쓰므로 이 값을 쓸 것 — check_reachable 이 이 값으로 도달성을 잰다",
+)
+# ── 어느 복도에서 학습할 것인가 ────────────────────────────────────────────
+# 아래 넷은 **첫 파서에** 있어야 한다. build_config() 가 remaining 을
+# configs.yaml 키 전용 파서에 그대로 넘기므로, 거기 걸리면 unrecognized
+# arguments 로 죽는다.
+parser.add_argument(
+    "--env", choices=("map", "scalar"), default="map",
+    help="map=실측 지도 형상(기본) · scalar=폭 2.4 m 단일값 (비교 대조군)",
+)
+parser.add_argument(
+    "--geometry-json", default=None,
+    help="map_geometry.py 산출 JSON. 기본은 env 쪽 기본값(corridor_L10b.json). --env map 전용",
+)
+parser.add_argument(
+    "--s-range", type=_parse_s_range, default="auto",
+    help="척추 호길이 중 학습에 쓸 대역(m). auto=지도 이름으로 조회(기본) · "
+         "full=전체 · LO:HI 직접 지정. --env map 전용",
+)
+parser.add_argument(
+    "--width-source", choices=("measured", "map"), default=None,
+    help="measured=실측 1.69/1.20 에 스냅(기본) · map=지도 값 그대로. --env map 전용",
 )
 AppLauncher.add_app_launcher_args(parser)
 args, remaining = parser.parse_known_args()
@@ -78,6 +115,28 @@ def build_config():
         p.add_argument(f"--{k}", type=t, default=t(v))
     cfg = p.parse_args(remaining)
 
+    # ── 하이브리드 관측 (이미지 + proprio) ────────────────────────────────
+    # **이걸 안 하면 proprio 키를 넣어도 조용히 무시된다.** dmc_vision 프리셋의
+    # mlp_keys 는 '$^' — 아무것도 안 맞는 정규식이다. MultiEncoder 가
+    # re.match(mlp_keys, key) 로 거르므로 매칭이 0개가 되고 MLP 가지 자체가
+    # 안 만들어진다. 에러도 안 난다.
+    #
+    # 공식 minecraft 프리셋이 쓰는 방식 그대로다.
+    # 디코더에도 넣는다 — 월드모델이 다음 스텝 v/omega 를 **예측**하도록
+    # 만들어야 가속 램프와 캐스터 미끄러짐이 잠재변수에 남는다.
+    #
+    # 기동 로그의 `Encoder MLP shapes: {'proprio': (2,)}` 로 확인할 것.
+    # `{}` 로 나오면 안 먹은 것이다.
+    cfg.encoder["mlp_keys"] = "proprio"
+    cfg.decoder["mlp_keys"] = "proprio"
+
+    # 액션 리핏을 끈다. 기본 2 이면 dreamer 가 --steps 를 반으로 나눠 돌면서
+    # (dreamer.py:213) 로거에는 곱해서 찍는다 (dreamer.py:224) — **텐서보드
+    # x축이 2배로 거짓말한다.** 게다가 액션 리핏은 래퍼가 아니라 suite env
+    # 안에 있어서(envs/dmc.py:50) 우리 env 에는 그 루프 자체가 없다.
+    # 1 로 두면 제어 주기가 30Hz 가 되어 실차 cmd_vel 과도 맞는다.
+    cfg.action_repeat = 1
+
     cfg.task = "jongky_corridor"
     cfg.logdir = os.path.expanduser(args.logdir)
     cfg.steps = args.steps
@@ -90,7 +149,7 @@ def build_config():
     return cfg
 
 
-def check_reachable(cfg) -> None:
+def check_reachable(cfg, env) -> None:
     """에피소드 시간 안에 목표에 닿을 수 있는지 본다.
 
     닿을 수 없으면 도달 보너스를 한 번도 못 받아 정책이 "도착" 을 못 배운다.
@@ -110,9 +169,13 @@ def check_reachable(cfg) -> None:
 
     import torch
 
-    from jongky_corridor_env import A_MAX, JongkyCorridorEnvCfg, scale_action
+    from jongky_corridor_env import A_MAX, scale_action
 
-    env_cfg = JongkyCorridorEnvCfg()
+    # cfg 클래스를 새로 만들면 안 된다. 지도 env 는 __init__ 에서 복도 길이에
+    # 맞춰 goal_x_range/goal_y_range 를 **런타임에** 좁힌다. 클래스 기본값
+    # (3,7)/(-0.6,0.6) 만 보면 실제 목표 범위를 알 수 없고, 그러면 이 검사가
+    # 실제로 뽑히지 않는 목표까지 계산에 넣는다.
+    env_cfg = env.env_cfg
     dt = env_cfg.sim.dt * env_cfg.decimation           # env 한 스텝의 실제 시간
     # dreamer 는 time_limit 을 action_repeat 로 나눈 뒤 쓴다 (main 에서 처리됨)
     horizon_s = cfg.time_limit * dt
@@ -153,11 +216,50 @@ def check_reachable(cfg) -> None:
     # 그게 잡히기 전에는 위 여유가 실제보다 낙관적이라고 봐야 한다.
 
 
+def env_overrides() -> dict:
+    """CLI 에서 **명시한 것만** cfg override 로 만든다.
+
+    명시 안 한 것은 넣지 않는다 — 기본값의 진실은 cfg 한 곳에만 둔다.
+    (cfg_overrides 는 setattr 로만 들어가므로 키는 cfg 의 최상위 속성명이어야
+    한다. 점 표기는 안 된다.)
+    """
+    if args.env != "map":
+        bad = [n for n, v in (("--geometry-json", args.geometry_json),
+                              ("--width-source", args.width_source)) if v is not None]
+        if args.s_range != "auto":
+            bad.append("--s-range")
+        if bad:
+            raise SystemExit(
+                f"--env {args.env} 에는 {', '.join(bad)} 를 쓸 수 없다 "
+                f"(지도 형상 설정은 --env map 전용).\n"
+                f"  --env scalar 는 폭 2.4 m 단일값 대조군이다."
+            )
+        return {}
+
+    ov = {}
+    if args.geometry_json is not None:
+        ov["geometry_json"] = args.geometry_json
+    if args.s_range != "auto":
+        ov["corridor_s_range"] = args.s_range
+    if args.width_source is not None:
+        ov["width_source"] = args.width_source
+    return ov
+
+
 def main() -> None:
     cfg = build_config()
+
+    # env 를 여기서 먼저 만든다. 이유 둘.
+    #   1) check_reachable 이 cfg 클래스가 아니라 env **인스턴스** 를 봐야 한다
+    #      — 지도 env 는 __init__ 에서 복도 길이에 맞춰 goal_x_range 를 좁힌다
+    #   2) 복도 형상 로그가 dreamer 가 뜨기 전에 먼저 찍힌다. 형상이 틀렸으면
+    #      Isaac 씬을 다 세우고 나서 아는 것보다 낫다
+    # get_env 는 싱글턴이라 아래 make_env 가 이 인스턴스를 그대로 받는다.
+    env = get_env(size=tuple(cfg.size), env_kind=args.env, **env_overrides())
+
     # dreamer.main 이 time_limit 을 action_repeat 로 나누므로 여기서도 맞춘다
     cfg.time_limit //= cfg.action_repeat
-    check_reachable(cfg)
+    check_reachable(cfg, env)
     cfg.time_limit *= cfg.action_repeat
 
     # make_env 를 우리 것으로 바꾼다. dreamer.py 는 task 이름 앞자리로
@@ -165,17 +267,21 @@ def main() -> None:
     def make_env(config, mode, id):
         import envs.wrappers as wrappers
 
-        env = get_env(size=tuple(config.size))
-        env = wrappers.TimeLimit(env, config.time_limit)
-        env = wrappers.SelectAction(env, key="action")
-        env = wrappers.UUID(env)
-        return env
+        # 인자를 주지 않는다 — 위에서 이미 만든 싱글턴을 그대로 받는다.
+        e = get_env()
+        e = wrappers.TimeLimit(e, config.time_limit)
+        e = wrappers.SelectAction(e, key="action")
+        e = wrappers.UUID(e)
+        return e
 
     dreamer_main.make_env = make_env
 
     print(f"logdir : {cfg.logdir}")
     print(f"steps  : {cfg.steps}")
     print(f"프리셋 : {args.config}")
+    print("복도   : " + env.env_kind + (
+        f" · {os.path.basename(env.env_cfg.geometry_json)} · s_range={env.env_cfg.corridor_s_range}"
+        if env.env_kind == "map" else f" · 폭 {env.env_cfg.corridor_width} m"))
     dreamer_main.main(cfg)
     simulation_app.close()
 
