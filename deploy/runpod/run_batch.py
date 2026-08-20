@@ -85,7 +85,8 @@ def main():
     p.add_argument("--seed-glob", default="corridor_1*f_[0-9]*.mp4")
     p.add_argument("--cond-glob", default="cond_*.txt")
     p.add_argument("--url", default="http://localhost:7860")
-    p.add_argument("--outputs", default="outputs", help="서버가 결과를 쓰는 폴더")
+    p.add_argument("--outputs", default="/workspace/Cosmos1GP/outputs",
+                   help="서버가 결과를 쓰는 폴더. 절대경로라 실행 위치와 무관하다")
     p.add_argument("--manifest", default="/workspace/batch_manifest.jsonl")
     p.add_argument("--resolution", default="832x624", help="4:3 만")
     p.add_argument("--length", type=int, default=121)

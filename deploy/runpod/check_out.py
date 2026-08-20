@@ -50,7 +50,9 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--manifest", default="/workspace/batch_manifest.jsonl")
     p.add_argument("--seeds-dir", default="/workspace/jongky_magic/deploy/runpod/seeds")
-    p.add_argument("--outputs", default="outputs")
+    # 절대경로 기본값 — 어느 디렉터리에서 실행해도 같은 곳을 본다.
+    # 상대경로였을 때 /workspace/jongky_magic 에서 돌려 "mp4 가 없다" 가 났다.
+    p.add_argument("--outputs", default="/workspace/Cosmos1GP/outputs")
     p.add_argument("--n", type=int, default=3, help="최근 몇 개를 볼지")
     p.add_argument("--out", default="/workspace/check.jpg")
     p.add_argument("--log", default="/workspace/batch.log",
