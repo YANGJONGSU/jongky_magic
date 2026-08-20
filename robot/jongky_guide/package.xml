@@ -7,6 +7,11 @@
   <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <!-- 층 전환. floors 인자를 줄 때만 임포트한다. 없으면 기동을 거부하므로
+       조용히 한 층짜리로 떨어지지 않는다.
+       (XML 주석 안에는 하이픈 두 개를 못 쓴다 — 그래서 인자 이름을 그대로
+        적지 않았다) -->
+  <exec_depend>guide_mission</exec_depend>
 
   <exec_depend>rclpy</exec_depend>
   <exec_depend>std_msgs</exec_depend>
