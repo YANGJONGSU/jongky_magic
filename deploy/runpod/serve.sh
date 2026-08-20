@@ -12,7 +12,7 @@ set -o pipefail
 
 ROOT="${ROOT:-/workspace}"
 REPO="$ROOT/Cosmos1GP"
-PY="${PY:-$ROOT/cosmos_venv310/bin/python}"
+PY="${PY:-python3}"
 LOG="$ROOT/v2w.log"
 PORT="${PORT:-7860}"
 
@@ -36,7 +36,7 @@ if [ -z "${CUDA_VISIBLE_DEVICES:-x}" ]; then
   export CUDA_VISIBLE_DEVICES=0
 fi
 
-[ -x "$PY" ] || { echo "!! 파이썬이 없다: $PY"; exit 1; }
+command -v "$PY" >/dev/null || { echo "!! 파이썬이 없다: $PY"; exit 1; }
 [ -d "$REPO" ] || { echo "!! 저장소가 없다: $REPO"; exit 1; }
 
 if pgrep -f "[g]radio_server_v2w" >/dev/null; then
