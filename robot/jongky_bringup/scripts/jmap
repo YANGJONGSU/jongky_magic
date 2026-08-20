@@ -46,6 +46,13 @@ fi
 echo "  주행:  다른 터미널에서  jdrive $FLOOR"
 echo "  종료:  여기서 Ctrl+C    (지도 저장·정리까지 자동)"
 echo
+echo "  개발 PC 에서 지도가 쌓이는 걸 보려면 (젯슨 화면 말고 노트북에서):"
+echo "      jview                     # 없으면 jongky_magic/robot/jongky_bringup/scripts/jview"
+echo "    또는 직접:"
+echo "      export ROS_DISCOVERY_SERVER=$(jongky_lan_ip):$DISCOVERY_PORT ROS_SUPER_CLIENT=TRUE"
+echo "      ros2 daemon stop; ros2 daemon start; sleep 10"
+echo "      rviz2 -d .../jongky_navigation/rviz/slam.rviz"
+echo
 
 # Ctrl+C 한 번으로 끝나게 한다. 예전에는 jsave·jstop 을 따로 쳐야 했는데,
 # 엘리베이터 타기 전에 빼먹으면 bag 이 계속 돌고 다음 층 맵핑과 충돌한다.

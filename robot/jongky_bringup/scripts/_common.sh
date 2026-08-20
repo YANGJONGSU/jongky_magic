@@ -16,9 +16,28 @@ CONTAINER="${JONGKY_CONTAINER:-jongky_field}"
 # RViz 쪽 연결이 안 끊긴다.
 DISCOVERY_CONTAINER="${JONGKY_DISCOVERY_CONTAINER:-jongky_discovery}"
 DISCOVERY_PORT="${JONGKY_DISCOVERY_PORT:-11811}"
+
+# 로봇 안의 노드는 루프백으로 붙는다. 젯슨 IP 가 DHCP 로 바뀌어도
+# 로봇 쪽은 아무것도 안 고쳐도 된다 — 개발 PC 의 환경변수만 바꾸면 된다.
 DISCOVERY_EP="127.0.0.1:$DISCOVERY_PORT"
 
+jongky_lan_ip() {
+  local ip
+  ip="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}')"
+  [ -z "$ip" ] && ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  echo "$ip"
+}
+
 # 서버가 없으면 띄운다. 이미 떠 있으면 아무것도 안 한다.
+#
+# 0.0.0.0 바인딩으로 충분하다 — 개발 PC 가 젯슨 LAN IP 로 붙어도 정상
+# 동작하는 것을 실측으로 확인했다(서버 id 1 로 따로 띄워 대조 실험).
+#
+# 정작 걸린 건 다른 데였다: `ros2 topic list` 는 기본 spin-time 이 1초라
+# WiFi + 디스커버리 서버 조합에서 그래프가 다 도착하기 전에 끝나 버린다.
+# 개발 PC 에서는 데몬을 먼저 띄우고 10초쯤 기다리거나
+# `--no-daemon --spin-time 15` 를 줄 것. 토픽이 "안 보이는" 게 아니라
+# "아직 안 온" 것이다.
 jongky_discovery_up() {
   if docker ps --format '{{.Names}}' | grep -qx "$DISCOVERY_CONTAINER"; then
     return 0
@@ -30,9 +49,7 @@ jongky_discovery_up() {
     bash -lc "source /opt/ros/jazzy/setup.bash && exec fastdds discovery -i 0 -l 0.0.0.0 -p $DISCOVERY_PORT" >/dev/null
   sleep 3
   if docker ps --format '{{.Names}}' | grep -qx "$DISCOVERY_CONTAINER"; then
-    local ip
-    ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
-    echo "  개발 PC 에서:  export ROS_DISCOVERY_SERVER=${ip:-<젯슨IP>}:$DISCOVERY_PORT ROS_SUPER_CLIENT=TRUE"
+    echo "  개발 PC 에서:  export ROS_DISCOVERY_SERVER=$(jongky_lan_ip):$DISCOVERY_PORT ROS_SUPER_CLIENT=TRUE"
   else
     echo "경고: 디스커버리 서버 기동 실패 — 개발 PC 에서 토픽이 안 보인다" >&2
     docker logs "$DISCOVERY_CONTAINER" 2>&1 | tail -5 >&2

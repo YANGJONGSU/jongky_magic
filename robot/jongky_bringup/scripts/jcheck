@@ -10,14 +10,19 @@
 set -uo pipefail
 source "$(dirname "$(readlink -f "$0")")/_common.sh"
 
+# 그래프를 한 번만, 넉넉히 기다려 받아서 재사용한다.
+# 디스커버리 서버를 쓰면 ros2 CLI 기본 대기(1초)로는 목록이 덜 온 채 끝나
+# "/scan 없음" 같은 거짓 경보가 난다 — 바로 아래 hz 는 멀쩡히 나오는데도.
 jongky_exec "$ROS_SETUP && \
+  TL=\"\$(ros2 topic list --no-daemon --spin-time 10 2>/dev/null)\" && \
+  NL=\"\$(ros2 node list --no-daemon --spin-time 5 2>/dev/null)\" && \
   echo '=== 토픽 ===' && \
   for t in /scan /odom /map /cmd_vel /odometry/filtered; do \
-    if ros2 topic list 2>/dev/null | grep -qx \$t; then echo \"  \$t 있음\"; else echo \"  \$t 없음  <-- 문제\"; fi; \
+    if echo \"\$TL\" | grep -qx \$t; then echo \"  \$t 있음\"; else echo \"  \$t 없음  <-- 문제\"; fi; \
   done && \
   echo '=== 노드 ===' && \
   for n in /ekf_filter_node /odom_imu_watch /slam_toolbox; do \
-    if ros2 node list 2>/dev/null | grep -qx \$n; then echo \"  \$n 있음\"; else echo \"  \$n 없음  <-- 문제\"; fi; \
+    if echo \"\$NL\" | grep -qx \$n; then echo \"  \$n 있음\"; else echo \"  \$n 없음  <-- 문제\"; fi; \
   done && \
   echo '=== 발행률 ===' && \
   timeout 6 ros2 topic hz /scan 2>/dev/null | head -2; \
