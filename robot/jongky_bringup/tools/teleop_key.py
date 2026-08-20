@@ -221,10 +221,17 @@ def read_key(timeout: float = 0.05) -> str:
 def prompt(settings, message: str) -> str:
     """waypoint 이름처럼 한 줄을 받을 때만 잠깐 정상 터미널로 돌아간다.
 
-    돌아온 뒤 입력 버퍼를 비우는 것이 중요하다. 안 그러면 이름 끝의 엔터가
-    다음 키 입력으로 읽혀서, 저장 직후 조작이 먹통이 된 것처럼 보인다.
+    버퍼를 **양쪽에서** 비운다.
+
+    - 들어가기 전: cbreak 로 주행하는 동안 눌린 키가 버퍼에 남아 있다.
+      `w` 를 연타하거나 누르고 있었으면 그게 그대로 input() 에 흘러들어가
+      이름 앞에 붙는다. 실제 현장 파일에 `wwwwwwwwwwwwwwwwwev2` 와
+      후진키가 샌 `.,,` 가 그렇게 만들어져 있었다.
+    - 나온 뒤: 이름 끝의 엔터가 다음 키 입력으로 읽혀서 저장 직후 조작이
+      먹통이 된 것처럼 보인다.
     """
     termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
+    termios.tcflush(sys.stdin, termios.TCIFLUSH)
     try:
         return input(message).strip()
     finally:

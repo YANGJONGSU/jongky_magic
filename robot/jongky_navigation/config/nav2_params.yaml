@@ -73,6 +73,12 @@ controller_server:
   ros__parameters:
     use_sim_time: false
     controller_frequency: 20.0
+    # Jazzy 의 diff_drive_controller 는 TwistStamped 만 구독한다
+    # (diff_drive_controller.hpp:125). Nav2 의 twist_publisher 는 하위호환
+    # 때문에 기본이 Twist 라(twist_publisher.hpp:63-64) 이걸 안 켜면
+    # 경로도 계획되고 로그도 정상인데 **바퀴만 안 돈다.**
+    # teleop_key.py:5-7 에 같은 함정이 이미 적혀 있었다.
+    enable_stamped_cmd_vel: true
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.001
@@ -156,6 +162,12 @@ behavior_server:
   ros__parameters:
     use_sim_time: false
     costmap_topic: local_costmap/costmap_raw
+    # Jazzy 의 diff_drive_controller 는 TwistStamped 만 구독한다
+    # (diff_drive_controller.hpp:125). Nav2 의 twist_publisher 는 하위호환
+    # 때문에 기본이 Twist 라(twist_publisher.hpp:63-64) 이걸 안 켜면
+    # 경로도 계획되고 로그도 정상인데 **바퀴만 안 돈다.**
+    # teleop_key.py:5-7 에 같은 함정이 이미 적혀 있었다.
+    enable_stamped_cmd_vel: true
     footprint_topic: local_costmap/published_footprint
     cycle_frequency: 10.0
     behavior_plugins: ["spin", "backup", "drive_on_heading", "wait"]
@@ -253,6 +265,12 @@ velocity_smoother:
   ros__parameters:
     use_sim_time: false
     smoothing_frequency: 20.0
+    # Jazzy 의 diff_drive_controller 는 TwistStamped 만 구독한다
+    # (diff_drive_controller.hpp:125). Nav2 의 twist_publisher 는 하위호환
+    # 때문에 기본이 Twist 라(twist_publisher.hpp:63-64) 이걸 안 켜면
+    # 경로도 계획되고 로그도 정상인데 **바퀴만 안 돈다.**
+    # teleop_key.py:5-7 에 같은 함정이 이미 적혀 있었다.
+    enable_stamped_cmd_vel: true
     feedback: "OPEN_LOOP"
     max_velocity: [0.40, 0.0, 1.50]
     min_velocity: [-0.30, 0.0, -1.50]
