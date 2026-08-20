@@ -49,6 +49,9 @@ if ! have uv; then
   say "uv 설치"
   curl -LsSf https://astral.sh/uv/install.sh | sh
   export PATH="$HOME/.local/bin:$PATH"
+  # 새 셸에서도 찾게 한다. 설치 후 따로 붙었을 때 uv: command not found 가 난다
+  grep -q 'HOME/.local/bin' "$HOME/.bashrc" 2>/dev/null || \
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
 fi
 have uv || { say "!! uv 를 못 찾겠다. PATH=$PATH"; exit 1; }
 
@@ -162,6 +165,14 @@ assert same_major or ("sm_%d%d" % cap) in arch, (
     % (cap[0], ", ".join(arch)))
 a = torch.randn(4000, 4000, device="cuda"); (a @ a).sum().item()
 print("  실연산 OK")
+
+# torch 만 확인하면 부족하다. 서버는 optimum.quanto 를 통해
+# torch.utils.cpp_extension -> setuptools 로 들어가는데, uv venv 에는
+# setuptools 가 없어서 여기서만 죽는다. 설치 중에는 아무 티도 안 난다.
+import importlib
+for m in ("setuptools", "optimum.quanto", "gradio", "mmgp", "cv2", "imageio"):
+    importlib.import_module(m)
+    print("  import %s OK" % m)
 PYEOF
 [ $? -eq 0 ] || { say "!! 검증 실패"; exit 1; }
 
@@ -170,16 +181,14 @@ cat <<MSG
 ────────────────────────────────────────────────────────────
 설치 완료.
 
-  서버 띄우기 (버퍼링 때문에 -u 를 반드시 넣을 것.
-  안 넣으면 "Running on local URL" 이 로그에 안 찍혀
-  다 떠 있는데도 안 뜬 것처럼 보인다):
+  서버 띄우기 — 한 줄이면 된다. 기동·대기·판정을 다 한다:
 
-    cd $REPO
-    nohup $PY -u gradio_server_v2w.py > $ROOT/v2w_server.log 2>&1 &
+    bash $REPO/../jongky_magic/deploy/runpod/serve.sh
 
-  준비 확인 (로그 말고 포트를 본다):
+  정지 / 로그:
 
-    ss -tln | grep 7860
+    bash .../serve.sh stop
+    bash .../serve.sh log
 
   씨앗 영상은 $REPO/seeds/ 에 올리고,
   생성은 gen_clip.py 로 한다 (같은 폴더의 스크립트 참조).
