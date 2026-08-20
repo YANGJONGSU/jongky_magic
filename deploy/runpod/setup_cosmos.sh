@@ -211,6 +211,56 @@ else
   git clone --depth 1 https://github.com/deepbeepmeep/Cosmos1GP "$REPO" || die "클론 실패"
 fi
 
+# ── 6b. 상류 버그 두 개를 깁는다 ─────────────────────────────────────────────
+# 저장소 마지막 커밋이 2025-02-15 인데 그대로 남아 있는 것들이다.
+#
+# (1) gradio_server_*.py:404 가 `get_attention_modes()` 를 부르는데 아무 데서도
+#     import 하지 않는다. 정의는 cosmos1/models/diffusion/module/attention.py 에
+#     있다. use_te 가 아니면 무조건 이 줄을 타므로 생성이 항상 죽는다.
+#
+# (2) 그 함수 자체도 깨져 있다. flash_attn / xformers 를 못 찾으면
+#     `except: pass` 로 넘어가서 이름이 **정의되지 않은 채** 남는데, 함수는
+#     `if flash_attn_func != None` 으로 그 이름을 읽는다. 그래서 import 를
+#     고쳐도 그 안에서 다시 NameError 가 난다. 바로 위 sageattn 은 None 을
+#     대입하는데 이 둘만 빠졌다 — 명백한 누락이다.
+#
+# 둘 다 저자가 의도한 모양으로 맞춰 놓는다. 이미 고쳐져 있으면 아무것도 안 한다.
+say "상류 버그 패치"
+REPO="$REPO" "$PY" - <<'PYEOF' || die "패치 실패"
+import os, sys
+repo = os.environ["REPO"]
+
+att = os.path.join(repo, "cosmos1/models/diffusion/module/attention.py")
+src = open(att, encoding="utf-8").read()
+n = 0
+for name, mod in (("flash_attn_func", "from flash_attn import flash_attn_func"),
+                  ("memory_efficient_attention",
+                   "from xformers.ops import memory_efficient_attention")):
+    bad = "    try:\n        %s\n    except:\n        pass\n" % mod
+    good = "    try:\n        %s\n    except:\n        %s = None\n" % (mod, name)
+    if bad in src:
+        src = src.replace(bad, good); n += 1
+if n:
+    open(att, "w", encoding="utf-8").write(src)
+print("  attention.py: %d곳 수정" % n)
+
+imp = ("from cosmos1.models.diffusion.module.attention import get_attention_modes"
+       "  # 추가: 상류가 import 를 빠뜨렸다")
+hook = ("from cosmos1.models.diffusion.inference.world_generation_pipeline import "
+        "DiffusionText2WorldGenerationPipeline, DiffusionVideo2WorldGenerationPipeline")
+for f in ("gradio_server_v2w.py", "gradio_server_t2w.py"):
+    path = os.path.join(repo, f)
+    if not os.path.isfile(path):
+        continue
+    t = open(path, encoding="utf-8").read()
+    if "import get_attention_modes" in t:
+        print("  %s: 이미 되어 있음" % f); continue
+    if hook not in t:
+        sys.exit("  !! %s 에서 삽입 위치를 못 찾겠다" % f)
+    open(path, "w", encoding="utf-8").write(t.replace(hook, hook + "\n" + imp, 1))
+    print("  %s: import 추가" % f)
+PYEOF
+
 # ── 7. 파이썬 의존성 ────────────────────────────────────────────────────────
 say "의존성 설치 (5~10분)"
 "${PIP[@]}" -q -r "$REPO/requirements.txt" || die "requirements 설치 실패"
