@@ -97,41 +97,44 @@ DMAX="$(nvidia-smi 2>/dev/null | grep -o 'CUDA Version: [0-9.]*' | head -1 | awk
 awk -v d="${DMAX:-0}" 'BEGIN{split(d,a,".");exit !(a[1]>12||(a[1]==12&&a[2]>=1))}' \
   || die "드라이버가 받아주는 CUDA 가 ${DMAX:-?} 라 cu121 을 쓸 수 없다. 파드를 바꿀 것."
 
-say "torch $TORCH_V (cu121) · numpy<2 로 맞춘다"
+say "torch $TORCH_V (cu121) 설치"
 "$PY" -m pip install --no-input -q \
   "torch==$TORCH_V" "torchvision==$TV_V" "torchaudio==$TA_V" --index-url "$CU_IDX" \
   || die "torch 설치 실패"
-# opencv-python 5.0 은 numpy>=2 로 빌드돼서 numpy 1.x 위에서는 배열을 주고받을
-# 때 깨진다. import 는 통과하므로 눈에 안 띈다 — mmgp 와 같은 모양이다.
-# 4.x 는 numpy 1.x 와 맞는다.
-# optimum-quanto 도 고정한다. requirements 는 mmgp==3.1.2 만 박아놨고
-# quanto 는 mmgp 가 의존성으로 끌어오면서 판올림된 게 들어왔다.
-# 0.2.7 이후 판은 state_dict 에서 `<모듈>.weight_qtype` 을 pop 하는데
-# 이 체크포인트에는 그 키가 없다 — `weight._data`(I8) 와 `weight._scale`(F32)
-# 만 들어 있는 예전 형식이다. 그래서 T5 인코더 로딩이 KeyError 로 죽었다.
-"$PY" -m pip install --no-input -q "numpy<2" "opencv-python<5" \
-  "optimum-quanto==0.2.7" || die "numpy/opencv/quanto 고정 실패"
 
-# 올린 조합이 실제로 쓸 수 있는지: 할당 + mmgp 가 필요로 하는 dtype
-"$PY" - <<'PYEOF' || die "torch 를 올렸는데도 조건을 못 맞춘다"
+# ── 4b. 제약 파일을 **다른 설치보다 먼저** 만든다 ──────────────────────────
+# 순서가 중요하다. 앞서 numpy/opencv/quanto 를 제약 없이 깔았다가 quanto 가
+# 의존성으로 torch 를 2.13 까지 끌어올렸고, 그 판은 이 드라이버(CUDA 12.8)로는
+# 안 돈다. 제약을 쓸 거면 **첫 설치부터** 걸어야 한다.
+#
+# · torch 3종  : 방금 넣은 그 버전 그대로
+# · numpy<2    : 이 torch 는 numpy 1.x 로 빌드됐다. 2.x 면 `_ARRAY_API not found`
+# · opencv<5   : 5.0 은 numpy>=2 로 빌드돼서 배열을 주고받을 때 깨진다
+# · quanto 0.2.7: 그 이후 판은 state_dict 에서 `weight_qtype` 을 pop 하는데
+#                 이 체크포인트에는 그 키가 없다 (`weight._data`/`_scale` 형식)
+"$PY" - > "$CONS" <<'PYEOF'
+import importlib.metadata as md
+for p in ("torch", "torchvision", "torchaudio"):
+    print("%s==%s" % (p, md.version(p)))
+print("numpy<2")
+print("opencv-python<5")
+print("optimum-quanto==0.2.7")
+PYEOF
+say "고정:"; sed 's/^/    /' "$CONS"
+PIP=( "$PY" -m pip install --no-input -c "$CONS" )
+
+# ── 4c. 나머지를 제약 아래에서 ──────────────────────────────────────────────
+"${PIP[@]}" -q "numpy<2" "opencv-python<5" "optimum-quanto==0.2.7" \
+  || die "numpy/opencv/quanto 설치 실패"
+
+# 이 조합이 실제로 쓸 수 있는지: 할당 + mmgp 가 필요로 하는 dtype
+"$PY" - <<'PYEOF' || die "고정한 조합이 GPU 에서 안 돈다 — 위 traceback 을 그대로 가져올 것"
 import torch, numpy
 assert hasattr(torch, "uint16"), "torch.uint16 이 없다 — mmgp 가 이걸 쓴다"
 assert numpy.__version__.startswith("1."), "numpy 가 2.x 다: " + numpy.__version__
 x = torch.randn(2000, 2000, device="cuda")
 print("  torch", torch.__version__, "· numpy", numpy.__version__, "· 할당 OK")
 PYEOF
-
-# 이 조합을 못박는다. requirements 안의 peft/transformers/optimum-quanto 가
-# 의존성으로 torch 나 numpy 를 다시 움직이면 방금 맞춘 게 도로 깨진다.
-"$PY" - > "$CONS" <<'PYEOF'
-import importlib.metadata as md
-for p in ("torch", "torchvision", "torchaudio", "numpy",
-          "opencv-python", "optimum-quanto"):
-    try: print("%s==%s" % (p, md.version(p)))
-    except md.PackageNotFoundError: pass
-PYEOF
-say "고정:"; sed 's/^/    /' "$CONS"
-PIP=( "$PY" -m pip install --no-input -c "$CONS" )
 
 # ── 5. 시스템 패키지 ────────────────────────────────────────────────────────
 # opencv 는 libGL 이, imageio[ffmpeg] 는 ffmpeg 가 없으면 import 에서 죽는다.
