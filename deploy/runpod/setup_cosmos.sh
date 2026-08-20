@@ -109,8 +109,41 @@ DMAX="$(nvidia-smi 2>/dev/null | grep -o 'CUDA Version: [0-9.]*' | head -1 | awk
 awk -v d="${DMAX:-0}" 'BEGIN{split(d,a,".");exit !(a[1]>12||(a[1]==12&&a[2]>=1))}' \
   || die "드라이버가 받아주는 CUDA 가 ${DMAX:-?} 라 cu121 을 쓸 수 없다. 파드를 바꿀 것."
 
+# ── 4a. 다른 CUDA 세대의 잔재를 걷어낸다 ────────────────────────────────────
+# torch 를 갈아치우면 본체는 바뀌지만 딸려 온 `nvidia-*` 휠은 **남는다**.
+# pip 은 그것들을 torch 의 의존성으로만 알지, 서로 배타적이라는 걸 모른다.
+# 이 파드에는 cu121 판과 cu130 판이 같이 깔려 있었고 —
+#   nvidia-cudnn-cu12 9.1.0.70  과  nvidia-cudnn-cu13 9.20.0.48
+#   nvidia-cublas-cu12 12.1.3.1 과  nvidia-cublas 13.1.1.3
+# CUDA 13 판이 먼저 잡혀서 `CUDNN_STATUS_NOT_INITIALIZED` 로 죽었다.
+# Conv2d 같은 작은 연산까지 실패한 게 메모리가 아니라 라이브러리 문제라는 표시다.
+#
+# cu12 세대 것과 nvidia-ml-py 만 남기고 지운다. 접미사 없는 이름(nvidia-cublas
+# 등)이 최신 세대 것이라 그것도 대상이다.
+say "다른 CUDA 세대 잔재 정리"
+STALE="$("$PY" - <<'@E@'
+import importlib.metadata as md
+keep = {"nvidia-ml-py", "nvidia-ml-py3", "nvidia-pyindex"}
+out = []
+for d in md.distributions():
+    n = (d.metadata["Name"] or "").lower()
+    if n.startswith("nvidia-") and n not in keep and not n.endswith("-cu12"):
+        out.append(n)
+print(" ".join(sorted(set(out))))
+@E@
+)"
+if [ -n "$STALE" ]; then
+  say "  지운다: $STALE"
+  "$PY" -m pip uninstall -y -q $STALE >/dev/null 2>&1 || true
+  # 지우면서 torch 가 쓰던 것도 같이 날아갔을 수 있으니 한 벌로 다시 깐다.
+  FORCE=--force-reinstall
+else
+  say "  잔재 없음"
+  FORCE=""
+fi
+
 say "torch $TORCH_V (cu121) 설치"
-"$PY" -m pip install --no-input -q \
+"$PY" -m pip install --no-input -q ${FORCE:+$FORCE} \
   "torch==$TORCH_V" "torchvision==$TV_V" "torchaudio==$TA_V" --index-url "$CU_IDX" \
   || die "torch 설치 실패"
 
@@ -166,6 +199,12 @@ assert bad not in src, (
     "체크포인트에는 그 키가 없다.")
 x = torch.randn(2000, 2000, device="cuda")
 print("  torch", torch.__version__, "· numpy", numpy.__version__, "· 할당 OK")
+
+# 행렬곱은 cuBLAS 라서 cuDNN 이 깨져 있어도 통과한다. 토크나이저는 Conv3d 를
+# 쓰고 거기서 CUDNN_STATUS_NOT_INITIALIZED 로 죽었으므로 합성곱까지 돌려본다.
+_c = torch.nn.Conv3d(3, 8, 3, padding=1).cuda()
+_c(torch.randn(1, 3, 8, 64, 64, device="cuda"))
+print("  cuDNN Conv3d OK · 빌드 cudnn", torch.backends.cudnn.version())
 
 # mmgp 가 참조하는 torch 속성이 이 버전에 다 있는지 미리 훑는다.
 # 없는 게 있으면 실행 중에 AttributeError 로 터지는데, 그게 모델을 다 읽은
