@@ -86,9 +86,13 @@ PYEOF
 
 # ── 4. torch/numpy 를 알려진 조합으로 맞춘다 ────────────────────────────────
 # mmgp 3.1.2 는 메타데이터에 `torch>=2.1.0` 이라고 적어놨는데 그게 틀렸다.
-# safetensors2.py 가 `torch.uint16` 을 쓰고, 그 dtype 은 torch 2.3 에서 생겼다.
-# 선언된 의존성만 확인하고 2.2 이미지를 고른 게 실패였다 — 그 모듈을 실제로
-# import 해봐야만 드러나는 종류다. 그래서 2.4.1 로 올린다.
+# 실제로는 훨씬 높다. `safetensors2.py` 가 `torch.uint16`(2.3 에서 생김) 을,
+# `offload.py` 가 `torch.nn.Buffer`(2.5 에서 생김) 를 쓴다. 선언만 보고 고르면
+# 이런 게 실행 도중에 하나씩 터진다 — 실제로 두 번 그렇게 터졌다.
+#
+# 그래서 버전을 **배포 시점**으로 맞춘다. mmgp 3.1.2 는 2025-01-21 배포이고
+# 그때 최신 torch 가 2.5.1 이었다 (2.6.0 은 8일 뒤). 그게 이 코드가 실제로
+# 개발된 환경이다.
 #
 # 이건 "플랫폼 torch 를 갈아치우지 않는다" 와 어긋나 보이지만 아니다. 그 규칙의
 # 이유는 드라이버 정합이었고 여기서는 CUDA 계열을 안 바꾼다: 이미지가 cu121,
@@ -97,7 +101,7 @@ PYEOF
 # numpy 도 같이 묶는다. 이 torch 는 numpy 1.x 로 빌드됐는데 의존성으로 numpy 2.2
 # 가 딸려 들어와 `_ARRAY_API not found` 가 났다. 경고처럼 보이지만 그 상태의
 # torch 는 numpy 변환이 통째로 죽어 있다.
-TORCH_V="${TORCH_V:-2.4.1}"; TV_V="${TV_V:-0.19.1}"; TA_V="${TA_V:-2.4.1}"
+TORCH_V="${TORCH_V:-2.5.1}"; TV_V="${TV_V:-0.20.1}"; TA_V="${TA_V:-2.5.1}"
 CU_IDX="https://download.pytorch.org/whl/cu121"
 
 # 드라이버가 cu121 을 받아주는지부터 본다. 12.1 미만이면 이 조합을 못 쓴다.
@@ -162,6 +166,32 @@ assert bad not in src, (
     "체크포인트에는 그 키가 없다.")
 x = torch.randn(2000, 2000, device="cuda")
 print("  torch", torch.__version__, "· numpy", numpy.__version__, "· 할당 OK")
+
+# mmgp 가 참조하는 torch 속성이 이 버전에 다 있는지 미리 훑는다.
+# 없는 게 있으면 실행 중에 AttributeError 로 터지는데, 그게 모델을 다 읽은
+# 뒤라서 매번 몇 분씩 날아간다. 여기서 목록으로 한 번에 본다.
+import os, re, importlib.util
+_spec = importlib.util.find_spec("mmgp")
+if _spec and _spec.submodule_search_locations:
+    _d = list(_spec.submodule_search_locations)[0]
+    _seen, _missing = set(), []
+    _pat = re.compile(r"\btorch\.([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?)")
+    for _f in os.listdir(_d):
+        if not _f.endswith(".py"):
+            continue
+        for _m in _pat.finditer(open(os.path.join(_d, _f), encoding="utf-8").read()):
+            _seen.add(_m.group(1))
+    for _a in sorted(_seen):
+        _o = torch
+        for _part in _a.split("."):
+            _o = getattr(_o, _part, None)
+            if _o is None:
+                _missing.append(_a); break
+    if _missing:
+        print("  경고: 이 torch 에 없는 속성을 mmgp 가 참조한다 →", ", ".join(_missing))
+        print("        실행 중에 AttributeError 로 터질 수 있다.")
+    else:
+        print("  ok mmgp 가 쓰는 torch 속성 %d개 전부 존재" % len(_seen))
 PYEOF
 
 # ── 5. 시스템 패키지 ────────────────────────────────────────────────────────
