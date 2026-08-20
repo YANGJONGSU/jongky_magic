@@ -21,6 +21,7 @@
 이미 만든 조합은 manifest 를 보고 건너뛴다. 끊겼다 다시 켜도 이어서 간다.
 """
 import argparse
+import fnmatch
 import glob
 import json
 import os
@@ -37,6 +38,30 @@ NEG = (
     "elements, unconvincing visuals, poorly edited content, jump cuts, visual noise, and "
     "flickering. Overall, the video is of poor quality."
 )
+
+
+def seeds_for(cond_path, all_seeds):
+    """이 조건을 어느 씨앗에 적용할지.
+
+    조건 파일 옆에 같은 이름의 `.seeds` 가 있으면 거기 적힌 무늬에 맞는
+    씨앗에만 적용한다. 없으면 전부.
+
+    왜 필요한가 — 엘리베이터나 사물함처럼 **특정 지점에만 있는 것**을 조건으로
+    쓰면, 그게 안 보이는 복도 씨앗에서는 모델이 없던 구조를 만들어낸다.
+    벽을 뚫어 엘리베이터를 그리는 순간 "복도 폭과 벽 위치는 안 변한다" 가
+    깨지고, 그 클립은 학습에 못 쓴다. depth 와 액션의 관계가 거짓이 되기 때문이다.
+    """
+    side = os.path.splitext(cond_path)[0] + ".seeds"
+    if not os.path.isfile(side):
+        return all_seeds
+    pats = [ln.strip() for ln in open(side, encoding="utf-8")
+            if ln.strip() and not ln.startswith("#")]
+    out = [s for s in all_seeds
+           if any(fnmatch.fnmatch(os.path.basename(s), p) for p in pats)]
+    if not out:
+        raise SystemExit("%s 의 무늬에 맞는 씨앗이 없다: %s"
+                         % (os.path.basename(side), ", ".join(pats)))
+    return out
 
 
 def load_done(path):
@@ -79,13 +104,18 @@ def main():
 
     done = load_done(a.manifest)
     # 조건이 바깥, 씨앗이 안쪽 — 멈춰도 노선 전체가 덮이도록
-    jobs = [(s, c) for c in conds for s in seeds
+    jobs = [(s, c) for c in conds for s in seeds_for(c, seeds)
             if (os.path.basename(s), os.path.basename(c)) not in done]
     if a.limit:
         jobs = jobs[:a.limit]
 
+    total = sum(len(seeds_for(c, seeds)) for c in conds)
     print("씨앗 %d · 조건 %d · 전체 %d조합 · 남은 작업 %d개"
-          % (len(seeds), len(conds), len(seeds) * len(conds), len(jobs)), flush=True)
+          % (len(seeds), len(conds), total, len(jobs)), flush=True)
+    for c in conds:
+        n = len(seeds_for(c, seeds))
+        print("   %-28s 씨앗 %d개%s" % (os.path.basename(c), n,
+              "" if n == len(seeds) else "  (일부에만 적용)"), flush=True)
     print("해상도 %s · %d프레임 · %d스텝" % (a.resolution, a.length, a.steps), flush=True)
     if not jobs:
         print("할 게 없다."); return
