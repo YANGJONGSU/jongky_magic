@@ -95,9 +95,19 @@ MAJOR="${CAP%%.*}"
 if [ -z "$CAP" ]; then
   say "!! nvidia-smi 가 GPU 를 못 본다. --gpus all 로 띄운 파드가 맞는지 확인할 것"; exit 1
 fi
-if [ "${MAJOR:-0}" -ge 12 ]; then IDX="https://download.pytorch.org/whl/cu128"; TAG="cu128"
-else                                IDX="https://download.pytorch.org/whl/cu124"; TAG="cu124"; fi
-say "GPU=$GPUNAME cap=$CAP → torch $TAG"
+# 휠은 GPU 세대가 아니라 **드라이버가 받아주는 CUDA** 로 골라야 한다.
+# sm_89 는 cu124 커널을 돌릴 수 있지만 드라이버가 CUDA 13 이면 그 조합에서
+# torch.cuda.is_available() 이 True 를 내면서 실제 할당이
+# "device busy or unavailable" 로 죽는다 — 열거는 되고 컨텍스트가 안 선다.
+DRV_MAX="$(nvidia-smi 2>/dev/null | grep -o 'CUDA Version: [0-9.]*' | head -1 | awk '{print $3}')"
+DMAJ="${DRV_MAX%%.*}"; DMIN="${DRV_MAX#*.}"
+if [ "${DMAJ:-0}" -ge 13 ] || { [ "${DMAJ:-0}" -eq 12 ] && [ "${DMIN:-0}" -ge 8 ]; } \
+   || [ "${MAJOR:-0}" -ge 12 ]; then
+  IDX="https://download.pytorch.org/whl/cu128"; TAG="cu128"
+else
+  IDX="https://download.pytorch.org/whl/cu124"; TAG="cu124"
+fi
+say "GPU=$GPUNAME cap=$CAP · 드라이버 지원 CUDA ${DRV_MAX:-?} → torch $TAG"
 
 if ! "$PY" -c "import torch" 2>/dev/null; then
   say "torch 설치 ($TAG)"
@@ -173,8 +183,10 @@ same_major = [a for a in arch if a.startswith("sm_%d" % cap[0])]
 assert same_major or ("sm_%d%d" % cap) in arch, (
     "이 torch 빌드에 sm_%d.x 계열이 없다 (%s) — CUDA 빌드를 바꿔야 한다"
     % (cap[0], ", ".join(arch)))
+# is_available() 은 열거만 본다. 이 파드에서 True 를 내면서 할당이 죽었다.
+# 반드시 실제로 메모리를 잡아봐야 한다.
 a = torch.randn(4000, 4000, device="cuda"); (a @ a).sum().item()
-print("  실연산 OK")
+print("  할당·실연산 OK")
 
 # torch 만 확인하면 부족하다. 서버는 optimum.quanto 를 통해
 # torch.utils.cpp_extension -> setuptools 로 들어가는데, uv venv 에는
