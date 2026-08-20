@@ -26,6 +26,16 @@ case "${1:-start}" in
     tail -f "$LOG"; exit 0 ;;
 esac
 
+# CUDA_VISIBLE_DEVICES 가 "없는 것" 과 "빈 문자열" 은 다르다. 빈 문자열은
+# "GPU 를 하나도 보여주지 마라" 는 뜻이고, torch 는 그걸
+# "CUDA-capable device(s) is/are busy or unavailable" 로 보고한다.
+# nvidia-smi 는 이 변수를 안 보므로 GPU 가 멀쩡히 놀고 있는 것처럼 나온다 —
+# 증상이 원인을 정반대로 가리키는 종류다. RunPod 컨테이너가 빈 값으로 내보낸다.
+if [ -z "${CUDA_VISIBLE_DEVICES:-x}" ]; then
+  echo "CUDA_VISIBLE_DEVICES 가 빈 문자열이다 — 0 으로 바로잡는다"
+  export CUDA_VISIBLE_DEVICES=0
+fi
+
 [ -x "$PY" ] || { echo "!! 파이썬이 없다: $PY"; exit 1; }
 [ -d "$REPO" ] || { echo "!! 저장소가 없다: $REPO"; exit 1; }
 

@@ -79,6 +79,16 @@ say "setuptools / wheel"
 
 # ── 5. torch — GPU 세대에 맞는 CUDA 빌드 ────────────────────────────────────
 # compute capability 로 고른다. 12.x = Blackwell → cu128, 그 아래는 cu124 로 충분.
+# 빈 문자열이면 GPU 가 하나도 안 보인다 (unset 과 다르다). RunPod 컨테이너가
+# 이렇게 내보내는 경우가 있고, 그러면 torch 가 "device busy or unavailable" 로
+# 죽는데 nvidia-smi 는 멀쩡해 보여서 원인을 엉뚱한 데서 찾게 된다.
+if [ -z "${CUDA_VISIBLE_DEVICES:-x}" ]; then
+  say "CUDA_VISIBLE_DEVICES 가 빈 문자열 — 0 으로 바로잡고 .bashrc 에도 남긴다"
+  export CUDA_VISIBLE_DEVICES=0
+  grep -q 'CUDA_VISIBLE_DEVICES' "$HOME/.bashrc" 2>/dev/null || \
+    echo 'export CUDA_VISIBLE_DEVICES=0' >> "$HOME/.bashrc"
+fi
+
 CAP="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')"
 GPUNAME="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)"
 MAJOR="${CAP%%.*}"
