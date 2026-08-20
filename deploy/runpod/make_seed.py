@@ -64,6 +64,7 @@ def parse_chunk(payload):
 def iter_images(path, topic):
     """(상대시각[s], HxWx3 RGB) 를 순서대로 내놓는다. 청크 하나만 메모리에 든다."""
     chans, t0 = {}, None
+    bad = [0]                       # 크기가 안 맞아 버린 프레임 수
     size = os.path.getsize(path)
     with open(path, "rb") as f:
         f.read(8)
@@ -109,8 +110,15 @@ def iter_images(path, topic):
                     p += 4                                    # step
                     dlen = struct.unpack_from("<I", d, p)[0]
                     p += 4
+                    buf = d[p:p + dlen]
+                    # 잘린 프레임이 섞여 있다. 기록이 정상 종료되지 않은 bag이라
+                    # 마지막까지 쓰이지 못한 메시지가 남는다. 하나 때문에 스캔
+                    # 전체가 죽으면 안 되므로 크기가 안 맞으면 건너뛴다.
+                    if len(buf) != h * w * 3:
+                        bad[0] += 1
+                        continue
                     yield (lt - t0) / 1e9, np.frombuffer(
-                        d[p:p + dlen], dtype=np.uint8).reshape(h, w, 3)
+                        buf, dtype=np.uint8).reshape(h, w, 3)
 
 
 def cmd_scan(a):
@@ -163,6 +171,56 @@ def cmd_clip(a):
         print("경고: 요청한 %d프레임 중 %d 만 나왔다 — bag 이 그 시각에 끝난다" % (need, n))
 
 
+
+def cmd_clips(a):
+    """한 번만 읽으면서 여러 시각의 클립을 동시에 뽑는다.
+
+    bag 하나가 28GB 라 `clip` 을 지점마다 부르면 그 크기를 지점 수만큼 다시
+    읽는다. 순회는 어차피 시간순이므로 한 번에 다 받아내는 게 맞다.
+    """
+    W, H = (int(x) for x in a.resolution.split("x"))
+    need = int(a.seconds * a.fps)
+    ats = sorted(a.at)
+    os.makedirs(a.out_dir, exist_ok=True)
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    open_w = {}                       # 시작시각 -> (writer, 경로, 쓴 프레임 수)
+    done = []
+    nxt = 0
+
+    for t, img in iter_images(a.bag, a.topic):
+        # 시작 시각을 지난 지점을 연다
+        while nxt < len(ats) and t >= ats[nxt]:
+            name = "%s_%04d" % (a.prefix, int(ats[nxt]))
+            path = os.path.join(a.out_dir, name + ".mp4")
+            open_w[ats[nxt]] = [cv2.VideoWriter(path, fourcc, a.fps, (W, H)), path, 0]
+            nxt += 1
+        if not open_w:
+            continue
+        up = cv2.resize(cv2.cvtColor(img, cv2.COLOR_RGB2BGR), (W, H),
+                        interpolation=cv2.INTER_LANCZOS4)
+        for key in list(open_w):
+            vw, path, n = open_w[key]
+            if n == 0:
+                cv2.imwrite(os.path.splitext(path)[0] + "_first.png", up)
+            vw.write(up)
+            open_w[key][2] = n + 1
+            if n + 1 >= need:
+                vw.release()
+                done.append((key, path, n + 1))
+                del open_w[key]
+        if not open_w and nxt >= len(ats):
+            break
+
+    for key, (vw, path, n) in open_w.items():
+        vw.release()
+        done.append((key, path, n))
+    for key, path, n in sorted(done):
+        flag = "" if n >= need else "  <- 짧다 (bag 이 끝났다)"
+        print("  t=%-5d %s · %d프레임 (%.1f초)%s"
+              % (key, os.path.basename(path), n, n / a.fps, flag))
+    print("%d개 · %dx%d" % (len(done), W, H))
+
+
 def main():
     p = argparse.ArgumentParser(description="bag 에서 Cosmos 씨앗 클립 만들기")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -184,6 +242,18 @@ def main():
                    help="4:3 만 쓸 것. 1104x832(720p) 또는 832x624(540p)")
     c.add_argument("--out", required=True)
     c.set_defaults(func=cmd_clip)
+
+    m = sub.add_parser("clips", help="한 번의 순회로 여러 지점을 동시에 뽑는다")
+    m.add_argument("bag")
+    m.add_argument("--topic", default="/camera/rgb/image_raw")
+    m.add_argument("--at", type=float, nargs="+", required=True, help="시작 시각들 [s]")
+    m.add_argument("--seconds", type=float, default=5.0)
+    m.add_argument("--fps", type=int, default=30)
+    m.add_argument("--resolution", default="832x624",
+                   help="4:3 만 쓸 것. 832x624(540p) 또는 1104x832(720p)")
+    m.add_argument("--prefix", required=True, help="파일 이름 앞부분 (예: corridor_10f)")
+    m.add_argument("--out-dir", required=True)
+    m.set_defaults(func=cmd_clips)
 
     a = p.parse_args()
     a.func(a)

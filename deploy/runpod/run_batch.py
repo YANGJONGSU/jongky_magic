@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""씨앗 × 조건 조합을 순서대로 돌려서 합성 클립을 쌓는다.
+
+    cd /workspace/Cosmos1GP
+    nohup python3 /workspace/jongky_magic/deploy/runpod/run_batch.py \
+        --seeds-dir /workspace/jongky_magic/deploy/runpod/seeds \
+        > /workspace/batch.log 2>&1 &
+
+    tail -f /workspace/batch.log
+
+## 순서를 왜 이렇게 잡았나
+
+조건을 바깥 고리, 씨앗을 안쪽 고리로 돈다. 즉 **조건 1을 모든 지점에 대해
+먼저** 끝내고 조건 2로 넘어간다. 중간에 멈춰도 노선 전체가 한 번은 덮이도록
+하기 위해서다. 반대로 하면 한 지점만 조건 4개를 갖고 나머지는 아무것도 없다.
+
+강화학습 데이터에서 중요한 건 한 곳의 깊이가 아니라 상황의 넓이다.
+
+## 재시작
+
+이미 만든 조합은 manifest 를 보고 건너뛴다. 끊겼다 다시 켜도 이어서 간다.
+"""
+import argparse
+import glob
+import json
+import os
+import time
+
+from gradio_client import Client, handle_file
+
+NEG = (
+    "The video captures a series of frames showing ugly scenes, static with no motion, "
+    "motion blur, over-saturation, shaky footage, low resolution, grainy texture, "
+    "pixelated images, poorly lit areas, underexposed and overexposed scenes, poor color "
+    "balance, washed out colors, choppy sequences, jerky movements, low frame rate, "
+    "artifacting, color banding, unnatural transitions, outdated special effects, fake "
+    "elements, unconvincing visuals, poorly edited content, jump cuts, visual noise, and "
+    "flickering. Overall, the video is of poor quality."
+)
+
+
+def load_done(path):
+    done = set()
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8") as fh:
+            for ln in fh:
+                try:
+                    r = json.loads(ln)
+                except ValueError:
+                    continue
+                if r.get("ok"):
+                    done.add((r["seed_file"], r["cond"]))
+    return done
+
+
+def main():
+    p = argparse.ArgumentParser(description="Cosmos 배치 생성")
+    p.add_argument("--seeds-dir", required=True)
+    p.add_argument("--seed-glob", default="corridor_1*f_[0-9]*.mp4")
+    p.add_argument("--cond-glob", default="cond_*.txt")
+    p.add_argument("--url", default="http://localhost:7860")
+    p.add_argument("--outputs", default="outputs", help="서버가 결과를 쓰는 폴더")
+    p.add_argument("--manifest", default="/workspace/batch_manifest.jsonl")
+    p.add_argument("--resolution", default="832x624", help="4:3 만")
+    p.add_argument("--length", type=int, default=121)
+    p.add_argument("--steps", type=int, default=20)
+    p.add_argument("--guidance", type=float, default=7.0)
+    p.add_argument("--max-frames", type=int, default=9)
+    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--limit", type=int, default=0, help="0 이면 전부")
+    a = p.parse_args()
+
+    seeds = sorted(glob.glob(os.path.join(a.seeds_dir, a.seed_glob)))
+    conds = sorted(glob.glob(os.path.join(a.seeds_dir, a.cond_glob)))
+    if not seeds:
+        raise SystemExit("씨앗을 못 찾겠다: %s" % a.seed_glob)
+    if not conds:
+        raise SystemExit("조건 프롬프트를 못 찾겠다: %s" % a.cond_glob)
+
+    done = load_done(a.manifest)
+    # 조건이 바깥, 씨앗이 안쪽 — 멈춰도 노선 전체가 덮이도록
+    jobs = [(s, c) for c in conds for s in seeds
+            if (os.path.basename(s), os.path.basename(c)) not in done]
+    if a.limit:
+        jobs = jobs[:a.limit]
+
+    print("씨앗 %d · 조건 %d · 전체 %d조합 · 남은 작업 %d개"
+          % (len(seeds), len(conds), len(seeds) * len(conds), len(jobs)), flush=True)
+    print("해상도 %s · %d프레임 · %d스텝" % (a.resolution, a.length, a.steps), flush=True)
+    if not jobs:
+        print("할 게 없다."); return
+
+    c = Client(a.url, verbose=False)
+    times = []
+    for i, (sv, cf) in enumerate(jobs, 1):
+        prompt = open(cf, encoding="utf-8").read().strip()
+        before = set(glob.glob(os.path.join(a.outputs, "*.mp4")))
+        t0 = time.time()
+        eta = ""
+        if times:
+            avg = sum(times) / len(times)
+            eta = " · 남은 예상 %.1f시간" % (avg * (len(jobs) - i + 1) / 3600)
+        print("[%d/%d] %s × %s%s" % (i, len(jobs), os.path.basename(sv),
+                                     os.path.basename(cf), eta), flush=True)
+        rec = {"seed_file": os.path.basename(sv), "cond": os.path.basename(cf),
+               "resolution": a.resolution, "steps": a.steps}
+        try:
+            c.predict(
+                prompt=prompt, neg_prompt=NEG, resolution=a.resolution,
+                video_length=a.length, seed=a.seed, num_inference_steps=a.steps,
+                embedded_guidance_scale=a.guidance, repeat_generation=1, tea_cache=0,
+                image_to_continue=None,
+                video_to_continue=handle_file(os.path.abspath(sv)),
+                max_frames=a.max_frames, api_name="/generate_video",
+            )
+            dt = time.time() - t0
+            times.append(dt)
+            new = sorted(set(glob.glob(os.path.join(a.outputs, "*.mp4"))) - before)
+            rec.update(ok=True, seconds=round(dt, 1), out=[os.path.basename(x) for x in new])
+            print("      %.1f분 · %s" % (dt / 60, ", ".join(rec["out"]) or "(새 파일 없음)"),
+                  flush=True)
+        except Exception as e:
+            rec.update(ok=False, error="%s: %s" % (type(e).__name__, e))
+            print("      실패: %s" % rec["error"], flush=True)
+        with open(a.manifest, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+    if times:
+        print("\n완료 %d개 · 평균 %.1f분 · 합계 %.1f시간"
+              % (len(times), sum(times) / len(times) / 60, sum(times) / 3600))
+
+
+if __name__ == "__main__":
+    main()
