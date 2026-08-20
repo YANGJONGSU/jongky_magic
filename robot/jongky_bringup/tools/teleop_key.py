@@ -23,6 +23,7 @@
 
     w     지금 위치를 waypoint 로 저장 → 이름 물어봄 → 치고 엔터
     p     저장된 목록 보기
+    h     헤딩 홀드 켜기/끄기 (기본 켬)
     q     종료
 
 주행 팁
@@ -34,19 +35,31 @@
       복도 가운데로 다니면 양쪽 벽이 다 보여 정합이 잘 된다.
     · 왔던 길을 한 번 되돌아오면 루프가 닫혀 지도가 크게 정확해진다.
     · 회전이 빠르다 싶으면 c 를 몇 번 눌러 더 낮춘다.
+
+헤딩 홀드
+    전진·후진 중에는 odom yaw 를 되먹여 방향을 붙잡는다. 차동구동은
+    개루프로 직진할 수 없고, 이 로봇은 캐스터가 구르지 못하고 끌리는
+    고정 구슬이라 그 외란이 매번 다르다 — 같은 명령에 102cm 와 118cm
+    를 간 실측이 있다. 고정 보정으로는 못 잡는다.
+
+    j/l/u/o 로 돌리는 동안에는 자동으로 풀리고, 손을 떼면 그 방향을
+    새 기준으로 다시 잡는다. h 로 끌 수 있다.
 """
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import select
 import sys
 import termios
+import time
 import tty
 
 import rclpy
 import yaml
 from geometry_msgs.msg import TwistStamped
+from nav_msgs.msg import Odometry
 from std_msgs.msg import String
 from rclpy.node import Node
 from rclpy.qos import QoSProfile
@@ -73,6 +86,11 @@ MOVES = {
 }
 
 
+# 헤딩 홀드 게인. jongky_calib.py hold 실측에서 나온 값이다 —
+# P 단독보다 PI + 데드밴드가 흔들림이 27% 적었다.
+KP, KI, DEADBAND_DEG, VZ_MAX = 0.5, 0.5, 1.0, 0.6
+
+
 class TeleopKey(Node):
     def __init__(self, speed: float, turn: float, out_path: str, map_frame: str, base_frame: str):
         super().__init__("jongky_teleop_key")
@@ -92,6 +110,21 @@ class TeleopKey(Node):
         self._base_frame = base_frame
         self._waypoints: dict[str, dict] = {}
 
+        # ── 헤딩 홀드 ────────────────────────────────────────────────────
+        # 차동구동은 개루프로 직진할 수 없다. 좌우 어떤 미세한 차이도 헤딩
+        # 오차로 적분된다. 여기 로봇은 캐스터가 구르지 못하고 끌리는 고정
+        # 구슬이라 그 외란이 매번 다르다 — 같은 명령에 102cm 와 118cm 를
+        # 간 실측이 있다. 고정 보정으로는 못 잡는다. 폐루프만 이긴다.
+        #
+        # 기준은 odom yaw. nav2 가 쓰는 것과 같은 값이라 이게 맞으면
+        # 제어 사슬 전체가 검증된다.
+        self._hold = True            # h 키로 끈다
+        self._hold_yaw: float | None = None   # 붙잡고 있는 목표 헤딩
+        self._yaw: float | None = None
+        self._i_term = 0.0
+        self._last_t = time.time()
+        self.create_subscription(Odometry, "/odom", self._on_odom, QoSProfile(depth=10))
+
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
 
@@ -99,6 +132,45 @@ class TeleopKey(Node):
             with open(self._out_path) as f:
                 self._waypoints = yaml.safe_load(f) or {}
             print(f"기존 waypoint {len(self._waypoints)}개를 읽었다: {self._out_path}")
+
+    def _on_odom(self, m: Odometry) -> None:
+        q = m.pose.pose.orientation
+        self._yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                               1.0 - 2.0 * (q.y ** 2 + q.z ** 2))
+
+    def heading_correct(self, vx: float, wz: float) -> float:
+        """직진 명령일 때만 헤딩을 붙잡는다. 회전 명령은 그대로 통과."""
+        now = time.time()
+        dt = min(0.2, now - self._last_t)
+        self._last_t = now
+
+        # 운전자가 돌리려는 중이거나 멈춰 있으면 홀드를 놓고 목표를 새로 잡는다.
+        if not self._hold or abs(wz) > 1e-6 or abs(vx) < 1e-6 or self._yaw is None:
+            self._hold_yaw = self._yaw
+            self._i_term = 0.0
+            return wz
+
+        if self._hold_yaw is None:
+            self._hold_yaw = self._yaw
+            return wz
+
+        err = self._yaw - self._hold_yaw
+        while err > math.pi:
+            err -= 2 * math.pi
+        while err < -math.pi:
+            err += 2 * math.pi
+
+        # PI + 데드밴드. 잡으려는 게 거의 일정한 편향이라 적분이 그걸 학습해
+        # 일정한 보정을 걸어두면 툭툭 밀 필요가 없어진다 (실측 흔들림 27% 감소).
+        self._i_term += err * dt
+        i_lim = VZ_MAX / max(KI, 1e-6)
+        self._i_term = max(-i_lim, min(i_lim, self._i_term))
+
+        if abs(err) < math.radians(DEADBAND_DEG):
+            corr = -KI * self._i_term      # 데드밴드 안에서도 적분은 유지
+        else:
+            corr = -KP * err - KI * self._i_term
+        return max(-VZ_MAX, min(VZ_MAX, corr))
 
     def publish(self, vx: float, wz: float) -> None:
         msg = TwistStamped()
@@ -218,11 +290,16 @@ def main() -> None:
                         print(f"\r    {n:20} x={w['position']['x']:+.3f} y={w['position']['y']:+.3f}")
                 else:
                     print("\r  아직 없다")
+            elif key == "h":
+                node._hold = not node._hold
+                node._hold_yaw = None
+                node._i_term = 0.0
+                print(f"\r  헤딩 홀드 {'켬' if node._hold else '끔'}")
 
             # 명령은 계속 재발행한다. diff_drive_controller 의 cmd_vel_timeout
             # 이 0.5s 라, 한 번만 보내면 곧 정지로 돌아간다 — i 를 눌러도
             # 안 움직이는 것처럼 보이는 원인이 이것이다.
-            node.publish(vx, wz)
+            node.publish(vx, node.heading_correct(vx, wz))
             rclpy.spin_once(node, timeout_sec=0.001)
     except KeyboardInterrupt:
         pass

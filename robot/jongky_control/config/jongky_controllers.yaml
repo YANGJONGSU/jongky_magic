@@ -58,16 +58,24 @@ diff_drive_controller:
     # description 과의 일치를 깨지 않고 실차 오차만 흡수할 수 있다.
     wheel_separation_multiplier:   1.0
 
-    # 좌우 타이어 반지름이 0.15mm(0.22%) 다르다. 엔코더는 각도만 재므로
-    # 이 차이를 전혀 못 본다 — odom 은 직진이라 하는데 로봇은 오른쪽으로
-    # 실린다. 자이로로 잰 실제 회전(-0.64도/초)과 odom 이 본 회전
-    # (-0.15도/초)의 차이에서 역산했다.
+    # 1.0 으로 되돌렸다 (2026-08-20). 한때 1.0022 / 0.9978 이 들어 있었고
+    # 근거는 "좌우 타이어 반지름 0.15mm 차이" 였다. 재측정에서 그 전제가
+    # 서지 않았다.
     #
-    # 타이어가 닳거나 교체하면 다시 재야 한다:
-    #   jongky_calib.py trace --vx 0.2 --dur 10 --skip 7
-    #   "odom 이 놓친 회전" 이 0 에 가까워지면 맞은 것이다.
-    left_wheel_radius_multiplier:  1.0022
-    right_wheel_radius_multiplier: 0.9978
+    #   · 공중 엔코더 검증: 좌우 스케일 오차가 -0.757% / -0.755% 로 일치.
+    #     좌우 비대칭이 아니라 공통 오차였고 counts_per_rev 로 흡수했다
+    #   · 바닥 직진 반복: 같은 명령에 102cm / 118cm, 헤딩 +12.4도 / +0.2도.
+    #     휨이 재현되지 않는다 — 고정 보정을 걸 대상이 아니다
+    #
+    # 재현되지 않는 이유는 캐스터다. 구르지 못하고 끌리는 고정 구슬이라
+    # 매번 다르게 민다. 확률적 외란에 고정 계수를 걸면 절반은 악화시킨다.
+    # 대응은 폐루프 헤딩 제어다 (teleop_key.py, jongky_calib.py hold).
+    # 실측: 1.5m 에 2.16도, 가로 이탈 5mm.
+    #
+    # 다시 넣으려면 재현성부터 확인할 것. trace 를 여러 번 돌려
+    # "odom 이 놓친 회전" 이 매번 같은 부호·크기로 나와야 근거가 된다.
+    left_wheel_radius_multiplier:  1.0
+    right_wheel_radius_multiplier: 1.0
 
     # base_frame_id 기본값은 base_link 다. 종키는 base_footprint 가
     # 바닥 기준 루트이므로 반드시 바꿔야 한다. 안 바꾸면 odom 이
