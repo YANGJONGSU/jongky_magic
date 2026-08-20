@@ -22,6 +22,7 @@ install(
   tools/speech.py
   tools/listen.py
   tools/brain.py
+  tools/follow_client.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

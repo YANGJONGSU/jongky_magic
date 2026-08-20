@@ -25,15 +25,19 @@ import threading
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import time
+
 import rclpy
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PoseStamped
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 from rclpy.node import Node
+from sensor_msgs.msg import CompressedImage, Image
 from std_msgs.msg import String
 
 from brain import Brain
+from follow_client import Follower
 from listen import Listener
 from speech import Speaker
 
@@ -44,10 +48,11 @@ WEB_DIR = os.path.join(get_package_share_directory("jongky_guide"), "web")
 class GuideState:
     """UI 가 폴링해 가는 현재 상태."""
 
-    status: str = "idle"          # idle | navigating | arrived | failed
+    status: str = "idle"          # idle | navigating | waiting | arrived | failed | alert
     destination: str = ""
     message: str = "목적지를 선택해 주세요"
     distance: float = 0.0
+    follower_m: float = -1.0      # 뒤따라오는 사람까지 거리. -1 = 모름
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def snapshot(self) -> dict:
@@ -57,6 +62,7 @@ class GuideState:
                 "destination": self.destination,
                 "message": self.message,
                 "distance": round(self.distance, 2),
+                "follower_m": round(self.follower_m, 1),
             }
 
     def set(self, **kw) -> None:
@@ -73,12 +79,14 @@ class GuideNode(Node):
         state: GuideState,
         listener: Listener | None = None,
         brain: Brain | None = None,
+        follower: Follower | None = None,
     ):
         super().__init__("jongky_guide")
         self._speaker = speaker
         self._state = state
         self._listener = listener
         self._brain = brain
+        self._follower = follower
         self._nav = BasicNavigator()
         self._waypoints = self._load_waypoints(waypoint_path)
         self._task: threading.Thread | None = None
@@ -86,6 +94,18 @@ class GuideNode(Node):
         # 외부(예: 음성 노드)에서도 목적지를 넣을 수 있게 열어 둔다
         self.create_subscription(String, "/guide/destination", self._on_destination_topic, 10)
         self._status_pub = self.create_publisher(String, "/guide/status", 10)
+
+        # ── 돌발상황 판단용 카메라 ────────────────────────────────────────
+        # 압축 토픽을 우선한다 — 이미 JPEG 이라 인코딩이 필요 없다.
+        # 젯슨 컨테이너의 cv_bridge 는 numpy ABI 충돌로 임포트가 안 되므로
+        # 원본 토픽으로 떨어질 때만 PIL 로 굽는다.
+        self._jpeg: bytes | None = None
+        self._raw: Image | None = None
+        if brain is not None:
+            self.create_subscription(
+                CompressedImage, "/camera/rgb/image_raw/compressed", self._on_compressed, 1
+            )
+            self.create_subscription(Image, "/camera/rgb/image_raw", self._on_raw, 1)
 
         self.get_logger().info(f"waypoint {len(self._waypoints)}개: {list(self._waypoints)}")
 
@@ -132,6 +152,114 @@ class GuideNode(Node):
         self._state.set(status="idle", destination="", message="안내를 취소했습니다", distance=0.0)
         self._speaker.say("안내를 취소합니다")
 
+    # ── 카메라 ────────────────────────────────────────────────────────────
+    def _on_compressed(self, msg: CompressedImage) -> None:
+        self._jpeg = bytes(msg.data)
+
+    def _on_raw(self, msg: Image) -> None:
+        self._raw = msg
+
+    def _latest_jpeg(self) -> bytes | None:
+        """압축 토픽이 있으면 그대로, 없으면 원본을 PIL 로 굽는다."""
+        if self._jpeg is not None:
+            return self._jpeg
+        msg = self._raw
+        if msg is None:
+            return None
+        try:
+            import io
+
+            import numpy as np
+            from PIL import Image as PILImage
+
+            enc = msg.encoding.lower()
+            if enc not in ("rgb8", "bgr8"):
+                self.get_logger().warn(f"다룰 수 없는 인코딩: {msg.encoding}")
+                return None
+            arr = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, 3)
+            if enc == "bgr8":
+                arr = arr[:, :, ::-1]
+            buf = io.BytesIO()
+            PILImage.fromarray(arr).save(buf, format="JPEG", quality=80)
+            return buf.getvalue()
+        except Exception as e:  # 판단은 부가 기능이다 — 주행을 막지 않는다
+            self.get_logger().warn(f"JPEG 인코딩 실패: {e}")
+            return None
+
+    # ── 돌발상황 ──────────────────────────────────────────────────────────
+    def _handle_obstacle(self, name: str, stuck_seconds: float) -> bool:
+        """VLM 에 한 장 물어보고 행동한다. 안내를 접어야 하면 True."""
+        jpeg = self._latest_jpeg()
+        if jpeg is None:
+            self.get_logger().warn("카메라 영상이 없어 판단을 건너뛴다")
+            return False
+
+        action, say = self._brain.judge_obstacle(jpeg, stuck_seconds)
+        self.get_logger().info(f"돌발상황 판단: {action} ({stuck_seconds:.0f}초 정체)")
+        if say:
+            self._speaker.say(say)
+
+        if action == "resume":
+            return False
+        if action in ("wait", "ask_to_move"):
+            self._state.set(message="길이 막혀 기다리는 중입니다")
+            self._publish_status()
+            return False
+        if action == "reroute":
+            # 코스트맵의 낡은 장애물을 털고 같은 목표로 다시 계획한다
+            self._state.set(message="다른 경로로 돌아갑니다")
+            self._publish_status()
+            self._nav.clearAllCostmaps()
+            self._nav.goToPose(self._to_pose(name))
+            return False
+        if action == "alert":
+            self._state.set(status="alert", message="위급 상황으로 정지했습니다", distance=0.0)
+            self._publish_status()
+            self._nav.cancelTask()
+            return True
+        return False
+
+    # ── 사람 추종 ─────────────────────────────────────────────────────────
+    def _wait_for_follower(self, name: str) -> bool:
+        """뒤처진 사람을 기다린다. 다시 따라오면 True, 포기하면 False.
+
+        Nav2 에는 '일시정지' 가 없다. 취소하고 다시 goToPose 하는 것이
+        같은 효과이고, 그 사이 로봇은 제자리에 선다.
+        """
+        LOST_LIMIT = 60.0  # 이보다 오래 안 오면 안내를 접는다
+
+        self._nav.cancelTask()
+        self._state.set(status="waiting", message="따라오실 때까지 기다립니다")
+        self._publish_status()
+        self._speaker.say("잠시 기다리겠습니다")
+
+        t0 = time.monotonic()
+        nagged = False
+        while time.monotonic() - t0 < LOST_LIMIT:
+            rclpy.spin_once(self, timeout_sec=0.2)
+            st = self._follower.poll()
+            # 탐지가 죽으면 '모름' 이다. 모른다고 계속 서 있으면 안 되므로
+            # 안내를 재개한다 — 탐지기 장애로 복도에 멈춰 서는 편이 더 나쁘다.
+            if not st.known:
+                self.get_logger().info("탐지 불명 — 안내를 재개한다")
+                break
+            if st.present:
+                self._speaker.say("다시 안내하겠습니다")
+                break
+            if not nagged and time.monotonic() - t0 > 15.0:
+                self._speaker.say("괜찮으세요? 이쪽입니다")
+                nagged = True
+        else:
+            self._state.set(status="idle", message="따라오지 않아 안내를 마칩니다", distance=0.0)
+            self._publish_status()
+            self._speaker.say("안내를 마치겠습니다. 필요하시면 다시 불러 주세요")
+            return False
+
+        self._state.set(status="navigating", message=f"{name} 으로 안내합니다")
+        self._publish_status()
+        self._nav.goToPose(self._to_pose(name))
+        return True
+
     def _guide_loop(self, name: str) -> None:
         self._state.set(status="navigating", destination=name, message=f"{name} 으로 안내합니다")
         self._publish_status()
@@ -139,10 +267,50 @@ class GuideNode(Node):
 
         self._nav.goToPose(self._to_pose(name))
 
+        # 정체 판정. 남은 거리가 STUCK_EPS 이상 줄지 않은 채 STUCK_AFTER 초가
+        # 지나면 막힌 것으로 본다. VLM 호출은 몇 초 걸리고 관제 노트북을 타므로
+        # COOLDOWN 을 두어 연타하지 않는다.
+        STUCK_EPS, STUCK_AFTER, COOLDOWN = 0.05, 6.0, 15.0
+        # 뒤처짐 판정. 순간 미검출로 멈춰 서면 안 되므로 연속 LOST_AFTER 초
+        # 동안 안 보일 때만 기다린다. 사람이 문틀에 잠깐 가리는 일은 흔하다.
+        FOLLOW_PERIOD, LOST_AFTER, TOO_FAR_M = 1.0, 4.0, 4.0
+        best = None
+        moved_at = time.monotonic()
+        judged_at = 0.0
+        seen_at = time.monotonic()
+        polled_at = 0.0
+
         while not self._nav.isTaskComplete():
             fb = self._nav.getFeedback()
+            now = time.monotonic()
             if fb:
-                self._state.set(distance=float(fb.distance_remaining))
+                dist = float(fb.distance_remaining)
+                self._state.set(distance=dist)
+                if best is None or best - dist > STUCK_EPS:
+                    best, moved_at = dist, now
+                elif (
+                    self._brain is not None
+                    and now - moved_at >= STUCK_AFTER
+                    and now - judged_at >= COOLDOWN
+                ):
+                    judged_at = now
+                    if self._handle_obstacle(name, now - moved_at):
+                        break
+                    moved_at = time.monotonic()  # 판단 뒤 다시 관찰
+
+            # 따라오고 있나. 안내로봇은 앞장서므로 이걸 안 보면 사람을 두고 간다.
+            if self._follower is not None and now - polled_at >= FOLLOW_PERIOD:
+                polled_at = now
+                st = self._follower.poll()
+                if not st.known:
+                    seen_at = now  # 모르면 있다고 친다
+                elif st.present and st.distance_m <= TOO_FAR_M:
+                    seen_at = now
+                    self._state.set(follower_m=round(st.distance_m, 1))
+                elif now - seen_at >= LOST_AFTER:
+                    if not self._wait_for_follower(name):
+                        return
+                    best, moved_at, seen_at = None, time.monotonic(), time.monotonic()
             rclpy.spin_once(self, timeout_sec=0.1)
 
         result = self._nav.getResult()
@@ -293,6 +461,9 @@ def main() -> None:
     # 젯슨 8GB 에 안 들어가는 큰 모델은 그렇게 쓴다. 판단이 이벤트 기반이라
     # 네트워크가 끊겨도 nav2 기본 동작으로 떨어질 뿐 주행은 계속된다.
     parser.add_argument("--llm-url", default="", help="ollama 주소 (예: http://192.168.129.97:11434/api/generate)")
+    parser.add_argument("--follow-url", default="",
+                        help="후면 사람 탐지 서비스 (예: http://localhost:8641/follower). "
+                             "주면 뒤처진 사람을 기다린다")
     args, ros_args = parser.parse_known_args()
 
     rclpy.init(args=ros_args)
@@ -303,8 +474,9 @@ def main() -> None:
     if args.llm_url:
         brain_kw["url"] = args.llm_url
     brain = Brain(**brain_kw) if args.llm else None
+    follower = Follower(url=args.follow_url) if args.follow_url else None
     state = GuideState()
-    node = GuideNode(args.waypoints, speaker, state, listener, brain)
+    node = GuideNode(args.waypoints, speaker, state, listener, brain, follower)
 
     server = ThreadingHTTPServer(("0.0.0.0", args.port), make_handler(node, state))
     threading.Thread(target=server.serve_forever, daemon=True).start()

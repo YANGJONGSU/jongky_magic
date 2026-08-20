@@ -8,10 +8,17 @@
   2. 돌발상황 판단 — 앞이 막혀 멈췄을 때 전면 카메라 한 장을 보고
      사람인지 물건인지, 어떻게 대응할지 정한다
 
-[왜 온보드인가]
-건물 10·11층이 격리된 서브넷이라 관제 노트북에 두면 층을 넘는 순간 끊긴다.
-젯슨에서 돌면 네트워크와 무관해진다. ollama 는 호스트에 있고 컨테이너는
---network host 로 뜨므로 localhost:11434 로 그냥 닿는다.
+[왜 관제 노트북인가]  (2026-08-19 실측으로 뒤집힘)
+원래는 층 격리(10·11층이 별도 서브넷) 때문에 온보드로 두려 했다.
+그러나 실제로 쓰는 모델 `gemma4:e2b` 는 7.2GB 고, **젯슨에 로드하는 시도만으로
+기기가 마비돼 전원 재시작이 필요했다.** 이미 Q4_K_M 이라 더 줄일 여지도 없다.
+
+→ 관제 노트북(RTX 5080 16GB)에 두고 URL 로 가리킨다. 판단이 이벤트 기반이라
+   네트워크가 끊겨도 주행은 nav2 로 그대로 돈다. 11층에서 쓰려면 노트북
+   AP 핫스팟이 필요하다 — 선택지가 아니라 전제 조건이다.
+
+굳이 온보드로 돌리려면 URL 을 명시적으로 localhost 로 주어야 한다.
+기본값으로는 젯슨을 치지 않는다.
 
 [안전 규약]
 **LLM 은 로봇을 직접 조종하지 않는다.** 정해진 행동 집합 중 하나를 고를 뿐이고,
@@ -27,12 +34,17 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 import urllib.error
 import urllib.request
 
 log = logging.getLogger("brain")
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
+# 관제 노트북. 젯슨(localhost)이 기본이면 --llm-url 을 빠뜨렸을 때
+# 7.2GB 모델을 온보드에 올리려다 기기가 멈춘다. 환경변수로 덮을 수 있다.
+OLLAMA_URL = os.environ.get(
+    "JONGKY_LLM_URL", "http://192.168.129.97:11434/api/generate"
+)
 
 # 돌발상황에서 고를 수 있는 행동. 이 밖의 것은 받지 않는다.
 ACTIONS = {

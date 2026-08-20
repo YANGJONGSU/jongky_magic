@@ -32,7 +32,11 @@ def generate_launch_description():
         DeclareLaunchArgument("voice_model", default_value="tiny"),
         DeclareLaunchArgument("mic", default_value=""),
         DeclareLaunchArgument("llm", default_value="", description="ollama 모델 (예: gemma4:e2b)"),
-        DeclareLaunchArgument("llm_url", default_value="", description="ollama 주소. 비우면 온보드"),
+        DeclareLaunchArgument("llm_url", default_value="",
+                              description="ollama 주소. 비우면 brain.py 기본값(관제 노트북)"),
+        DeclareLaunchArgument("follow_url", default_value="",
+                              description="후면 사람 탐지 서비스. 주면 뒤처진 사람을 기다린다 "
+                                          "(예: http://localhost:8641/follower)"),
         DeclareLaunchArgument("tts_voice", default_value="", description="piper onnx 경로"),
         DeclareLaunchArgument("audio_device", default_value="", description="aplay -D 값"),
         DeclareLaunchArgument("use_rviz", default_value="false"),
@@ -62,6 +66,7 @@ def generate_launch_description():
             "--mic", LaunchConfiguration("mic"),
             "--llm", LaunchConfiguration("llm"),
             "--llm-url", LaunchConfiguration("llm_url"),
+            "--follow-url", LaunchConfiguration("follow_url"),
         ],
     )
 
