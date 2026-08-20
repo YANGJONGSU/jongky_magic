@@ -68,6 +68,12 @@ fi
 PY="$VENV/bin/python"
 PIP=( uv pip install --python "$PY" )
 
+# uv 로 만든 venv 에는 setuptools 가 없다 (python -m venv 와 다르다).
+# optimum-quanto 가 torch.utils.cpp_extension 을 통해 import 하므로, 없으면
+# 서버가 뜨는 순간 ModuleNotFoundError 로 죽는다 — 설치 단계에서는 아무 티도 안 난다.
+say "setuptools / wheel"
+"${PIP[@]}" setuptools wheel || exit 1
+
 # ── 5. torch — GPU 세대에 맞는 CUDA 빌드 ────────────────────────────────────
 # compute capability 로 고른다. 12.x = Blackwell → cu128, 그 아래는 cu124 로 충분.
 CAP="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')"
