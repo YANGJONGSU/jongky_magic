@@ -49,6 +49,8 @@ def main():
     p.add_argument("--max-frames", type=int, default=9,
                    help="씨앗에서 조건으로 쓸 프레임 수")
     p.add_argument("--repeat", type=int, default=1, help="같은 설정으로 몇 개 뽑을지")
+    p.add_argument("--log", default="/workspace/v2w.log",
+                   help="실패했을 때 들여다볼 서버 로그")
     a = p.parse_args()
 
     prompt = open(a.prompt_file).read().strip()
@@ -59,7 +61,31 @@ def main():
     c = Client(a.url, verbose=False)
     t0 = time.time()
     print("생성 시작", time.strftime("%H:%M:%S"), flush=True)
-    r = c.predict(
+    try:
+        r = call(c, a, prompt)
+    except Exception as e:
+        # gradio 서버가 show_error=True 없이 뜨면 클라이언트에는
+        # "예외가 났다" 는 사실만 오고 내용이 안 온다. 진짜 traceback 은
+        # 서버 stdout, 즉 로그 파일에 있다. 사람이 다시 찾아 들어가지 않도록
+        # 여기서 바로 꺼내 보여준다.
+        print("\n실패:", type(e).__name__, e)
+        print("\n--- 서버 로그 마지막 40줄 (%s) ---" % a.log)
+        try:
+            with open(a.log, encoding="utf-8", errors="replace") as fh:
+                for ln in fh.read().splitlines()[-40:]:
+                    print("  " + ln)
+        except OSError as oe:
+            print("  로그를 못 읽는다:", oe)
+        raise SystemExit(1)
+    dt = time.time() - t0
+    print("완료 %s · 소요 %.1f분 (%.0f초) · 클립당 %.1f분" %
+          (time.strftime("%H:%M:%S"), dt / 60, dt, dt / 60 / max(a.repeat, 1)), flush=True)
+    print("반환:", r, flush=True)
+    print("결과는 outputs/ 에 쌓인다")
+
+
+def call(c, a, prompt):
+    return c.predict(
         prompt=prompt,
         neg_prompt=NEG,
         resolution=a.resolution,
@@ -74,11 +100,6 @@ def main():
         max_frames=a.max_frames,
         api_name="/generate_video",
     )
-    dt = time.time() - t0
-    print("완료 %s · 소요 %.1f분 (%.0f초) · 클립당 %.1f분" %
-          (time.strftime("%H:%M:%S"), dt / 60, dt, dt / 60 / max(a.repeat, 1)), flush=True)
-    print("반환:", r, flush=True)
-    print("결과는 outputs/ 에 쌓인다")
 
 
 if __name__ == "__main__":
