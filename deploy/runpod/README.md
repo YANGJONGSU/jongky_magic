@@ -16,7 +16,12 @@
 
 Cosmos1GP 는 python 3.10 을 전제한다 — `mmgp==3.1.2` 가 `python>=3.10`,
 `torch>=2.1.0`. 이 이미지는 시스템 파이썬이 3.10, torch 2.2.0+cu121 이라
-**아무것도 새로 만들 필요가 없다.**
+**venv 를 새로 만들 필요가 없다.**
+
+다만 torch 는 2.4.1 로 올린다. mmgp 3.1.2 의 선언은 `torch>=2.1.0` 이지만
+그게 틀렸다 — `safetensors2.py` 가 `torch.uint16` 을 쓰고 그 dtype 은 torch
+2.3 에서 생겼다. CUDA 계열(cu121)은 그대로 두고 파이썬 쪽 버전만 올리는 것이라
+드라이버 정합은 유지된다.
 
 앞서 python 3.12 인 24.04 이미지로 시도했다가 uv 설치 → 3.10 venv 생성 →
 torch 직접 선택으로 이어졌고, `uv not found` / `setuptools AssertionError` /
@@ -71,8 +76,19 @@ torch 는 이 네 단계를 메시지 하나로 뭉쳐서 보고한다. 그래�
 
 `requirements.txt` 안의 `peft` / `transformers` / `optimum-quanto` 는 torch 를
 의존성으로 갖기 때문에, 제약 없이 설치하면 pip 가 조용히 torch 를 올린다.
-`setup_cosmos.sh` 는 설치 전에 현재 버전을 constraints 로 못박고, 설치 후에
-**실제로 안 바뀌었는지 다시 확인한다.**
+`setup_cosmos.sh` 는 torch 2.4.1 + numpy<2 로 맞춘 뒤 그 조합을 constraints 로
+못박고, 설치 후에 **실제로 안 바뀌었는지 다시 확인한다.**
+
+numpy 를 같이 묶는 이유: 이 torch 는 numpy 1.x 로 빌드됐는데 의존성으로 numpy 2.2
+가 딸려 들어오면 `_ARRAY_API not found` 가 난다. 경고처럼 보이지만 그 상태의
+torch 는 numpy 변환이 통째로 죽어 있다.
+
+## 검증은 서버가 쓰는 심볼로
+
+`import mmgp` 는 통과하는데 서버는 `from mmgp import offload` 에서 죽을 수 있다.
+`offload.py` 가 `safetensors2` 를 끌고 들어가고 거기서 문제가 터지는데, 패키지
+`__init__` 은 그 경로를 안 건드리기 때문이다. 실제로 그렇게 한 번 통과시킨 뒤
+서버가 죽었다. 그래서 검증은 `gradio_server_v2w.py` 17번 줄과 같은 import 를 쓴다.
 
 ## 클립 생성
 

@@ -76,17 +76,51 @@ x = torch.randn(4000, 4000, device="cuda")
 print("  할당·실연산 OK", float((x @ x).sum()))
 PYEOF
 
-# ── 4. torch 를 못 건드리게 못박는다 ─────────────────────────────────────────
-# 아래 requirements 안의 peft / transformers / optimum-quanto 는 torch 를
-# 의존성으로 갖는다. 제약을 안 걸면 pip 가 조용히 올려버리고, 그러면 드라이버와
-# 다시 어긋난다. 지금 깔려 있는 정확한 버전으로 고정한다.
+# ── 4. torch/numpy 를 알려진 조합으로 맞춘다 ────────────────────────────────
+# mmgp 3.1.2 는 메타데이터에 `torch>=2.1.0` 이라고 적어놨는데 그게 틀렸다.
+# safetensors2.py 가 `torch.uint16` 을 쓰고, 그 dtype 은 torch 2.3 에서 생겼다.
+# 선언된 의존성만 확인하고 2.2 이미지를 고른 게 실패였다 — 그 모듈을 실제로
+# import 해봐야만 드러나는 종류다. 그래서 2.4.1 로 올린다.
+#
+# 이건 "플랫폼 torch 를 갈아치우지 않는다" 와 어긋나 보이지만 아니다. 그 규칙의
+# 이유는 드라이버 정합이었고 여기서는 CUDA 계열을 안 바꾼다: 이미지가 cu121,
+# 드라이버가 12.8 까지 받으니 cu121 휠은 그대로 유효하다. 파이썬 쪽만 올린다.
+#
+# numpy 도 같이 묶는다. 이 torch 는 numpy 1.x 로 빌드됐는데 의존성으로 numpy 2.2
+# 가 딸려 들어와 `_ARRAY_API not found` 가 났다. 경고처럼 보이지만 그 상태의
+# torch 는 numpy 변환이 통째로 죽어 있다.
+TORCH_V="${TORCH_V:-2.4.1}"; TV_V="${TV_V:-0.19.1}"; TA_V="${TA_V:-2.4.1}"
+CU_IDX="https://download.pytorch.org/whl/cu121"
+
+# 드라이버가 cu121 을 받아주는지부터 본다. 12.1 미만이면 이 조합을 못 쓴다.
+DMAX="$(nvidia-smi 2>/dev/null | grep -o 'CUDA Version: [0-9.]*' | head -1 | awk '{print $3}')"
+awk -v d="${DMAX:-0}" 'BEGIN{split(d,a,".");exit !(a[1]>12||(a[1]==12&&a[2]>=1))}' \
+  || die "드라이버가 받아주는 CUDA 가 ${DMAX:-?} 라 cu121 을 쓸 수 없다. 파드를 바꿀 것."
+
+say "torch $TORCH_V (cu121) · numpy<2 로 맞춘다"
+"$PY" -m pip install --no-input -q \
+  "torch==$TORCH_V" "torchvision==$TV_V" "torchaudio==$TA_V" --index-url "$CU_IDX" \
+  || die "torch 설치 실패"
+"$PY" -m pip install --no-input -q "numpy<2" || die "numpy 고정 실패"
+
+# 올린 조합이 실제로 쓸 수 있는지: 할당 + mmgp 가 필요로 하는 dtype
+"$PY" - <<'PYEOF' || die "torch 를 올렸는데도 조건을 못 맞춘다"
+import torch, numpy
+assert hasattr(torch, "uint16"), "torch.uint16 이 없다 — mmgp 가 이걸 쓴다"
+assert numpy.__version__.startswith("1."), "numpy 가 2.x 다: " + numpy.__version__
+x = torch.randn(2000, 2000, device="cuda")
+print("  torch", torch.__version__, "· numpy", numpy.__version__, "· 할당 OK")
+PYEOF
+
+# 이 조합을 못박는다. requirements 안의 peft/transformers/optimum-quanto 가
+# 의존성으로 torch 나 numpy 를 다시 움직이면 방금 맞춘 게 도로 깨진다.
 "$PY" - > "$CONS" <<'PYEOF'
 import importlib.metadata as md
-for p in ("torch", "torchvision", "torchaudio"):
+for p in ("torch", "torchvision", "torchaudio", "numpy"):
     try: print("%s==%s" % (p, md.version(p)))
     except md.PackageNotFoundError: pass
 PYEOF
-say "torch 고정:"; sed 's/^/    /' "$CONS"
+say "고정:"; sed 's/^/    /' "$CONS"
 PIP=( "$PY" -m pip install --no-input -c "$CONS" )
 
 # ── 5. 시스템 패키지 ────────────────────────────────────────────────────────
@@ -116,10 +150,12 @@ say "의존성 설치 (5~10분)"
 # constraints 를 걸었어도 실제로 지켜졌는지 본다. 이 검사가 없으면 며칠 뒤에
 # "왜 또 안 되지" 로 돌아온다.
 say "설치 후 torch 재확인"
-"$PY" - <<'PYEOF' || die "의존성 설치가 torch 를 건드렸다. constraints 가 안 먹었다."
-import torch
+"$PY" - <<'PYEOF' || die "의존성 설치가 torch 나 numpy 를 건드렸다. constraints 가 안 먹었다."
+import torch, numpy
+assert hasattr(torch, "uint16")
+assert numpy.__version__.startswith("1."), "numpy " + numpy.__version__
 x = torch.randn(2000, 2000, device="cuda")
-print("  torch", torch.__version__, "· 할당 OK")
+print("  torch", torch.__version__, "· numpy", numpy.__version__, "· 할당 OK")
 PYEOF
 
 # ── 9. 체크포인트 ───────────────────────────────────────────────────────────
@@ -157,13 +193,21 @@ JEOF
 
 # ── 11. import 사슬 검증 ────────────────────────────────────────────────────
 # 서버를 띄우고 5분 기다렸다가 import 하나 때문에 죽는 걸 여기서 먼저 잡는다.
+#
+# 껍데기만 import 하면 안 된다. 앞서 `import mmgp` 는 통과했는데 서버는
+# `from mmgp import offload` 에서 죽었다 — offload.py 가 safetensors2 를 끌고
+# 들어가고 거기서 torch.uint16 을 만지는데, 패키지 __init__ 은 그걸 안 건드린다.
+# 그래서 **서버 파일이 실제로 쓰는 심볼을** 그대로 불러본다.
 say "import 검증"
 "$PY" - <<'PYEOF' || die "import 검증 실패 — 위 traceback 을 그대로 가져올 것"
 import importlib
-for m in ("torch", "transformers", "optimum.quanto", "mmgp", "gradio",
+for m in ("torch", "numpy", "transformers", "optimum.quanto", "gradio",
           "cv2", "imageio", "sentencepiece", "peft", "einops"):
     importlib.import_module(m)
     print("  ok", m)
+# gradio_server_v2w.py 17번 줄과 같은 import
+from mmgp import offload, profile_type
+print("  ok mmgp.offload / profile_type")
 PYEOF
 
 echo
