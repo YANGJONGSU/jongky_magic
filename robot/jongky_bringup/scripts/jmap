@@ -4,6 +4,12 @@
 #   jmap 10f                 시작
 #   [Ctrl+C]                 지도 저장 + 정리까지 자동
 #   jmap 10f --no-camera     영상 없이 (bag 이 1/30 로 줄어든다)
+#   jmap 10f --no-rviz       화면 없이 (기본은 켜짐)
+#
+# **RViz 를 켜고 몬다.** 1차 촬영이 실패한 이유의 절반은 아무것도 안 보이는
+# 상태로 찍었기 때문이다. 복도가 두 겹으로 그려지는 순간이 화면에 바로
+# 나타나는데, 그때 되돌아가 다시 지나가면 루프가 닫혀 보정된다.
+# 몇 시간 뒤 재처리해서 알면 이미 늦는다.
 #
 # 한 번 주행에 지도·waypoint·bag·Cosmos 씨앗 영상이 다 나온다.
 # 현장은 다시 가기 비싸므로 받을 수 있는 건 한 번에 받는다.
@@ -18,7 +24,12 @@ fi
 shift || true
 
 WANT_CAM=1
-[ "${1:-}" = "--no-camera" ] && WANT_CAM=0
+WANT_RVIZ=1          # 지도가 쌓이는 걸 보면서 몰아야 한다. --no-rviz 로 끈다
+for a in "$@"; do
+  [ "$a" = "--no-camera" ] && WANT_CAM=0
+  [ "$a" = "--no-rviz" ]   && WANT_RVIZ=0
+done
+RVIZ_ARG=false; [ "$WANT_RVIZ" = "1" ] && RVIZ_ARG=true
 
 STAMP="${FLOOR}_$(date +%m%d_%H%M)"
 TOPICS="/scan /odom /tf /tf_static /imu/data /joint_states /cmd_vel"
@@ -65,7 +76,7 @@ jongky_exec "$ROS_SETUP; \
   $CAM_CMD \
   nohup ros2 bag record -o '/host/bags/$STAMP' $TOPICS > /tmp/bag.log 2>&1 < /dev/null & \
   sleep 3; \
-  ros2 launch jongky_navigation bringup_navigation.launch.py mode:=slam use_rviz:=false" &
+  ros2 launch jongky_navigation bringup_navigation.launch.py mode:=slam use_rviz:=$RVIZ_ARG" &
 
 wait $!
 finish
