@@ -59,6 +59,64 @@
     <xacro:property name="caster_y"      value="0.028"/>
     <xacro:property name="caster_z"      value="${caster_radius - wheel_radius}"/>
 
+    <!-- [시뮬 전용] 구르는 캐스터 (is_sim:=true 일 때만 펼쳐진다)
+
+         왜 필요한가 — 고정 구슬은 구르지 못하고 끌린다. 제자리 회전에서
+         구동륜과 캐스터가 같은 마찰계수를 쓰므로 비에서 mu 가 상쇄된다.
+         즉 지면 마찰을 아무리 바꿔도 이 비는 안 변한다.
+
+           캐스터 하중 분담 = |COM_x| / |caster_x| = 0.04942 / 0.12523 = 39.5%
+             -> N_c = 25.535 N x 0.395 = 10.08 N,  N_w = 15.46 N
+           캐스터 미끄럼 반경 r_c = sqrt(0.12523^2 + 0.028^2) = 0.12832 m
+           저항 토크 = mu x 10.08 x 0.12832 = mu x 1.2931 N.m
+           구동 토크 = mu x 15.46 x 0.059545 = mu x 0.9205 N.m
+           비 = 0.712 < 1  ->  쿨롱 기준 제자리 회전 자체가 불가능
+
+         실제로 Isaac 에서 최대 각속도 20초에 3.1 rad 밖에 안 돈다
+         (이론값의 1/7.4). 복도 폭을 바꿔도 같은 값이 나온다 —
+         로봇 동역학 문제이지 환경 문제가 아니다.
+
+         고치면 저항이 미끄럼 마찰(mu~1)에서 구름 저항(c_rr 0.01~0.05)으로
+         바뀌므로 비가 14 이상으로 올라간다.
+         (캐스터를 별도 링크로 떼면 COM 이 2.2% 뒤로 가서 미끄럼 기준 비는
+          0.712 -> 0.687 로 오히려 조금 나빠진다. 구름으로 바꾸는 것이
+          바로 그래서 유일한 답이다 — 하중 배치로는 못 뒤집는다.)
+
+         [이게 모델 문제라는 근거] 실물은 제자리 회전을 잘 한다. 위 wheel_y
+         를 확정한 실험 자체가 "제자리 5바퀴 회전 3회" 다. 비 0.69 가 실물의
+         물리라면 그 실험은 애초에 성립하지 않는다. 즉 0.69 는 끌리는 고정
+         구슬로 모델링한 탓이지 실물의 값이 아니다.
+         (teleop_key.py · jongky_controllers.yaml 이 말하는 "구르지 못하고
+          끌리는 고정 구슬" 은 직진 헤딩이 매번 다르게 밀린다는 관찰이다.
+          회전을 막을 정도의 저항이라는 뜻이 아니다.)
+
+         [안 넣은 것] 볼이 소켓 안에서 미끄러지며 생기는 저항은 모델에
+         없다. 실물 볼 캐스터면 실효 c_eff 0.1~0.2 쯤이고, 그 값이라도
+         비는 4.6~9.1 이라 회전은 문제없다. 넣고 싶으면 아래 두 관절의
+         dynamics friction 을 올리면 되는데, Isaac URDF 임포터가 그 값을
+         읽는지 확인이 안 됐고 과하게 잡으면 회전이 다시 죽는다
+         (관절당 0.05 N.m 이면 비가 0.89 로 되돌아간다). 지금은 0 으로
+         두고 tools/check_rotation.py 로 실측부터 하는 순서다.
+
+         [트레일] 스위블 축이 접지점보다 앞에 있어야 캐스터가 진행 방향으로
+         스스로 정렬한다. 트레일 0 이면 정렬 복원 모멘트가 없어 옆으로 그냥
+         끌리고, 고정 구슬과 다를 게 없어진다. 볼 반지름과 같은 12.5mm 를 준다.
+         스위블 각 0(직진 정렬)에서 볼 중심이 실측 캐스터 위치와 정확히
+         겹치도록 스위블 축을 caster_x + trail 에 놓는다. -->
+    <xacro:property name="caster_trail"     value="${caster_radius}"/>
+
+    <!-- 볼 캐스터 실물 무게. 지름 25mm 플라스틱 볼 + 요크 = 개당 20g 쯤.
+         아래에서 body_mass 에 상쇄분을 빼므로 전체 합은 2.603 kg 그대로다.
+
+         [주의] 0 에 가깝게 주면 안 된다. 차체와의 질량비가 커질수록 PhysX
+         관절 솔버가 흔들린다 — 바퀴(0.05kg, 50:1)가 armature 를 필요로 했던
+         것과 같은 이유다. 여기 20g 은 실물 근사이면서 비를 246:1 로 묶는다.
+         볼 관성은 2/5 m r^2 = 6.3e-7 kg.m^2 로 바퀴(2.2e-5)의 1/35 다.
+         check_rotation.py 에서 캐스터 롤 속도가 튀면 여기부터 올릴 것
+         (강철 볼이면 64g 이 실물값이고 관성도 6배가 된다). -->
+    <xacro:property name="caster_ball_mass" value="0.010"/>
+    <xacro:property name="caster_yoke_mass" value="0.010"/>
+
     <!-- 메시 실측 bbox (base_link.stl, mm→m 환산)
          관성 계산은 이 실제 치수로 한다. -->
     <xacro:property name="body_len"      value="0.24952"/>
@@ -116,7 +174,14 @@
          50g 추정하고, 나머지를 몸통에 몰아준다.
             2.603 − 0.05×2 = 2.503
          바퀴 질량은 몸통의 2%라 추정 오차가 결과에 거의 영향 없다. -->
-    <xacro:property name="body_mass"     value="2.503"/>
+    <!-- is_sim 이면 캐스터를 별도 링크로 떼어내므로 그만큼 몸통에서 뺀다.
+         두 경우 모두 합계는 실측 2.603 kg 으로 같다
+         (tools/check_merged.py 가 이 합을 본다). -->
+    <xacro:property name="caster_split_mass" value="0.0"/>
+    <xacro:if value="${is_sim}">
+      <xacro:property name="caster_split_mass" value="${2*(caster_ball_mass + caster_yoke_mass)}"/>
+    </xacro:if>
+    <xacro:property name="body_mass"     value="${2.503 - caster_split_mass}"/>
     <xacro:property name="wheel_mass"    value="0.05"/>
 
     <xacro:property name="mesh_scale"    value="0.001 0.001 0.001"/>
@@ -165,21 +230,30 @@
         </geometry>
       </collision>
 
-      <!-- 왼쪽 캐스터 : 별도 링크 없이 base_link의 충돌 구슬로 처리 -->
-      <collision>
-        <origin xyz="${caster_x} ${caster_y} ${caster_z}" rpy="0 0 0"/>
-        <geometry>
-          <sphere radius="${caster_radius}"/>
-        </geometry>
-      </collision>
+      <!-- 캐스터 2개 : 별도 링크 없이 base_link 의 충돌 구슬로 처리한다.
+           실물 스택은 물리를 안 돌리므로 이걸로 충분하고, 이렇게 두면
+           /joint_states 에 없는 관절이 안 생겨 robot_state_publisher 와
+           TF 가 깨끗하다.
 
-      <!-- 오른쪽 캐스터 -->
-      <collision>
-        <origin xyz="${caster_x} ${-caster_y} ${caster_z}" rpy="0 0 0"/>
-        <geometry>
-          <sphere radius="${caster_radius}"/>
-        </geometry>
-      </collision>
+           시뮬(is_sim:=true)에서는 이 구슬을 빼고 아래 insert_caster 가
+           구르는 링크로 다시 세운다. 끌리는 구슬이 제자리 회전을 죽인다. -->
+      <xacro:unless value="${is_sim}">
+        <!-- 왼쪽 캐스터 -->
+        <collision>
+          <origin xyz="${caster_x} ${caster_y} ${caster_z}" rpy="0 0 0"/>
+          <geometry>
+            <sphere radius="${caster_radius}"/>
+          </geometry>
+        </collision>
+
+        <!-- 오른쪽 캐스터 -->
+        <collision>
+          <origin xyz="${caster_x} ${-caster_y} ${caster_z}" rpy="0 0 0"/>
+          <geometry>
+            <sphere radius="${caster_radius}"/>
+          </geometry>
+        </collision>
+      </xacro:unless>
 
       <!-- 관성은 콜리전 박스가 아니라 실제 차체 치수로 계산한다.
            마진 포함된 body_wid(280)를 넣으면 izz가 1.6배로 부풀어
@@ -249,6 +323,101 @@
 
     <xacro:insert_wheel side="l" dir="1"/>
     <xacro:insert_wheel side="r" dir="-1"/>
+
+
+    <!-- ============================================================
+         [시뮬 전용] 구르는 캐스터 — is_sim:=true 에서만 나온다
+
+         구조는 실물 볼 캐스터 그대로다. 관절 2개를 직렬로 건다.
+
+           base_link
+             └ ${side}_caster_swivel_joint  (continuous, axis Z)   요크가 방향을 튼다
+                 └ ${side}_caster_yoke
+                     └ ${side}_caster_roll_joint (continuous, axis Y)  볼이 구른다
+                         └ ${side}_caster_ball   (충돌 구슬)
+
+         이 두 자유도면 어느 방향으로 가도 미끄러지지 않고 구를 수 있다.
+         제자리 회전에서 캐스터가 지나가는 궤적은 반지름 0.128 m 원의
+         접선 방향(거의 ±Y)인데, 요크가 그쪽으로 돌아서면 볼은 순수 구름이
+         된다. 직진에서는 요크가 뒤로 정렬해 평범한 캐스터가 된다.
+
+         [왜 X·Y 두 롤 축이 아닌가] 볼 캐스터를 X롤+Y롤 짐벌로 근사하면
+         부모 X 관절이 90도 근처로 누적됐을 때 자식 Y 축이 수직이 되어
+         전진 방향 구름이 막힌다(짐벌락). 제자리 회전이 X 롤을 무한정
+         누적시키므로 반드시 그 상태를 지난다. 스위블 방식엔 그 특이점이 없다.
+
+         [왜 저마찰 재질(mu_caster)이 아닌가] 비가 1을 넘으려면
+         mu_c/mu_w < 0.712 이어야 한다. 그런데 PhysX 는 두 재질의 마찰을
+         기본적으로 평균으로 합치므로 캐스터 shape 을 mu=0 으로 둬도 지면
+         재질(1.0)과 평균되어 실효 0.5 밖에 안 내려간다 -> 비 1.42, 여유
+         1.4배뿐이다. 게다가 URDF 에는 접촉면별 마찰을 적을 자리가 없고
+         Isaac URDF 임포터도 로봇 전체에 재질 하나만 물린다. 즉 이 방법은
+         env 나 USD 후처리를 고쳐야 하고, 그러고도 옆으로 미는 힘 응답이
+         실물과 달라진다. 구름으로 가면 저항이 c_rr 0.01~0.05 로 떨어져
+         비가 14쯤 되고, 이건 실물 볼 캐스터의 실제 물리 그대로다.
+
+         [USD 변환 주의] 이 관절들은 구동하지 않는 수동 관절이다.
+         convert_urdf.py 의 joint-damping 인자는 모든 관절에 일괄로 들어간다.
+         100 으로 변환하면 캐스터가 감쇠 100 에 묶여 못 구른다 — 구동륜은
+         env 의 ImplicitActuatorCfg 가 덮어쓰지만 캐스터는 덮어쓸 주인이 없다.
+         joint-damping 을 0.0 으로 두고 변환할 것. 구동륜 게인은 어차피 env 가
+         다시 쓴다. 확인은 sim/jongky_rl/tools/check_rotation.py 가 해준다.
+         ============================================================ -->
+    <xacro:macro name="insert_caster" params="side dir">
+
+      <!-- 요크 : 수직축으로 도는 부분. 비주얼은 base_link.stl 이 이미
+           그리고 있으므로 넣지 않는다 (겹쳐 그리면 z-fighting 만 난다). -->
+      <link name="${side}_caster_yoke">
+        <inertial>
+          <origin xyz="${-caster_trail/2} 0 0" rpy="0 0 0"/>
+          <mass value="${caster_yoke_mass}"/>
+          <xacro:sphere_inertia m="${caster_yoke_mass}" r="${caster_radius}"/>
+        </inertial>
+      </link>
+
+      <!-- damping·friction 0 : 수동 관절이라 저항이 있으면 안 된다.
+           Isaac 변환기가 URDF 값을 읽는 경로로 들어올 때를 위한 명시이고,
+           CLI 인자가 이기는 경로에서는 위 [USD 변환 주의] 를 따라야 한다. -->
+      <joint name="${side}_caster_swivel_joint" type="continuous">
+        <parent link="base_link"/>
+        <child  link="${side}_caster_yoke"/>
+        <axis   xyz="0 0 1"/>
+        <origin xyz="${caster_x + caster_trail} ${dir*caster_y} ${caster_z}" rpy="0 0 0"/>
+        <dynamics damping="0.0" friction="0.0"/>
+      </joint>
+
+      <!-- 볼 : 접지하는 유일한 부분. 반지름은 실측 그대로 12.5mm.
+           스위블 각 0 에서 중심이 (caster_x, ±caster_y, caster_z) 에 온다 —
+           고정 구슬 시절 위치와 정확히 같다. -->
+      <link name="${side}_caster_ball">
+        <collision>
+          <origin xyz="0 0 0" rpy="0 0 0"/>
+          <geometry>
+            <sphere radius="${caster_radius}"/>
+          </geometry>
+        </collision>
+
+        <inertial>
+          <origin xyz="0 0 0" rpy="0 0 0"/>
+          <mass value="${caster_ball_mass}"/>
+          <xacro:sphere_inertia m="${caster_ball_mass}" r="${caster_radius}"/>
+        </inertial>
+      </link>
+
+      <joint name="${side}_caster_roll_joint" type="continuous">
+        <parent link="${side}_caster_yoke"/>
+        <child  link="${side}_caster_ball"/>
+        <axis   xyz="0 1 0"/>
+        <origin xyz="${-caster_trail} 0 0" rpy="0 0 0"/>
+        <dynamics damping="0.0" friction="0.0"/>
+      </joint>
+
+    </xacro:macro>
+
+    <xacro:if value="${is_sim}">
+      <xacro:insert_caster side="l" dir="1"/>
+      <xacro:insert_caster side="r" dir="-1"/>
+    </xacro:if>
 
 
     <!-- ============================================================

@@ -10,9 +10,11 @@
 #   MARS actor_phase15 가 종키에 못 올라간 이유가 정확히 이 불일치였다
 #   (MAX_VX 1.5 대 실차 0.40, 3.75배).
 #
-# [카메라] URDF 변환 때 fixed joint 를 병합하지 않았으므로 camera_link 프레임이
-#   USD 에 그대로 살아 있다. 카메라를 그 prim 아래에 붙이면 실측 장착 위치
-#   (base_link 기준 x=0.07, z=0.1656)가 자동으로 맞는다.
+# [카메라] 이 파일은 --merge-joints 로 변환한 USD 를 쓴다 (아래 JONGKY_USD 주석).
+#   병합되는 것은 강체이지 프레임이 아니라서 camera_link 는 Xform prim 으로
+#   그대로 남는다 (tools/check_merged.py 가 확인한다). 카메라를 그 prim 아래에
+#   붙이면 실측 장착 위치 (base_link 기준 x=0.07, z=0.1656)가 자동으로 맞는다.
+#   — 예전 주석은 "병합하지 않았으므로 살아 있다" 였는데 전제가 반대였다.
 
 from __future__ import annotations
 
@@ -55,6 +57,30 @@ WHEEL_SEPARATION = 0.11909  # m — 제자리 5바퀴 회전 3회 평균으로 �
 V_MAX = 0.40                # m/s
 OMEGA_MAX = 1.50            # rad/s
 A_MAX = 0.30                # m/s^2  (액션 램프 제한)
+
+
+# ── 액션 스케일 ────────────────────────────────────────────────────────────
+def scale_action(actions: torch.Tensor) -> torch.Tensor:
+    """[-1,1] 정규화 액션 → 실차 한계 안의 (v, omega).
+
+    **여기서 tanh 를 쓰면 안 된다.** DreamerV3 의 연속 액터는 이미 tanh 를
+    거친 [-1,1] 을 뱉는다. 한 겹 더 걸면 실효 범위가 [-0.762, 0.762] 로 줄어
+    상한이 v 0.305 m/s · omega 1.142 rad/s 가 된다 — 정책이 실차 v_max 0.40 에
+    영원히 못 닿고, 양 끝에서 기울기가 이중으로 눌린다. 게다가
+    train_dreamer.check_reachable 이 V_MAX 로 잰 도달 가능 거리(8.0 m)와
+    실제(6.09 m)가 어긋나서, 정확히 그 검사가 막으려던 "목표에 못 닿는다" 가
+    경고 없이 통과했다.
+
+    범위 밖 액션(다른 알고리즘·탐색 노이즈)에는 clamp 로 대비한다. 포화 구간의
+    기울기가 0 이 되지만, 액터가 이미 tanh 를 쓰는 한 그 구간에 들어갈 일이
+    없고 tanh 를 안 쓰는 알고리즘에는 하드 리밋이 정확한 의미다.
+
+    학습 쪽에서 실효 상한이 필요하면 V_MAX 를 직접 읽지 말고 이 함수에 물어볼 것
+    (``scale_action(torch.ones(1, 2))``). 그래야 스케일을 다시 손대도 검사가
+    따라온다 — 위 사고가 정확히 둘이 어긋나서 났다.
+    """
+    limits = torch.tensor([V_MAX, OMEGA_MAX], device=actions.device, dtype=actions.dtype)
+    return torch.clamp(actions, -1.0, 1.0) * limits
 
 
 @configclass
@@ -205,10 +231,12 @@ class JongkyCorridorEnvCfg(DirectRLEnvCfg):
     # 목표를 8m 밖에 두면 최고 속도로 직진해도 못 닿아서 도달 보너스를 한 번도
     # 못 받는다 — 정책이 "도착" 을 배울 방법이 없어진다.
     #
-    # 3~7m 로 두면 최악(7m)이 20초 에피소드(time_limit 600)에서 최고속 주행
-    # 14초 거리다 — 회전·감속 여유가 남는다. 여기서 "목표를 향해 간다" 를
-    # 배운 뒤에 거리를 늘리는 것이 순서다. 처음부터 멀면 초기 랜덤 정책이
-    # 보상을 거의 못 받아 학습이 안 붙는다.
+    # 3~7m 로 두면 최악은 시작 x 1.0 · 목표 x 7.0 · 가로 어긋남 1.0 m
+    # (시작 y ±0.4 + 목표 y ±0.6) 라 6.08 m 다. 20초 에피소드(time_limit 600)
+    # 에서 최고속 0.40 m/s 로 15.2초, 가속 램프까지 빼도 여유 21% 가 남는다
+    # — train_dreamer.check_reachable 이 매 학습 시작 때 이 계산을 다시 한다.
+    # 여기서 "목표를 향해 간다" 를 배운 뒤에 거리를 늘리는 것이 순서다.
+    # 처음부터 멀면 초기 랜덤 정책이 보상을 거의 못 받아 학습이 안 붙는다.
     goal_x_range = (3.0, 7.0)
     goal_y_range = (-0.6, 0.6)
     goal_radius = 0.35          # 도달 판정. MARS warehouse_env 와 같은 값
@@ -293,7 +321,7 @@ class JongkyCorridorEnv(DirectRLEnv):
     # ── 행동 ───────────────────────────────────────────────────────────────
     def _pre_physics_step(self, actions: torch.Tensor) -> None:
         """[-1,1] 정규화 액션 → 실차 한계 안의 (v, omega) → 좌우 바퀴 각속도."""
-        cmd = torch.tanh(actions.clone()) * torch.tensor([V_MAX, OMEGA_MAX], device=self.device)
+        cmd = scale_action(actions.to(self.device))
 
         # 가속 제한. 실차 보드가 램프를 걸기 때문에 시뮬에서도 같이 건다.
         dv_max = A_MAX * self.cfg.sim.dt * self.cfg.decimation

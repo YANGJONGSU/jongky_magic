@@ -25,6 +25,7 @@ simulation_app = AppLauncher(args).app
 
 import torch  # noqa: E402
 
+from jongky_corridor_env import scale_action  # noqa: E402
 from jongky_map_corridor_env import JongkyMapCorridorEnv, JongkyMapCorridorEnvCfg  # noqa: E402
 
 # 실차 footprint (nav2_params.yaml 과 같아야 한다)
@@ -37,6 +38,16 @@ cfg.geometry_json = args.json
 cfg.scene.num_envs = 4
 cfg.episode_length_s = 120.0
 env = JongkyMapCorridorEnv(cfg)
+
+# 회전 시험 길이와 그 이론값. omega_max 를 그대로 곱하지 말고 실제 액션
+# 스케일러에 act=1.0 을 넣어서 뽑는다 — 예전에 env 가 액션에 tanh 를 한 겹
+# 더 걸고 있어서 act=1.0 이 1.50 이 아니라 tanh(1)*1.50 = 1.142 rad/s 였고,
+# 여기 박아 둔 "이론 30 rad" 은 그 상태에서 틀린 값이었다 (실제 이론값은
+# 22.85 rad). tanh 를 걷어낸 지금은 act=1.0 이 진짜로 OMEGA_MAX 를 낸다.
+SPIN_STEPS = 600
+SPIN_S = SPIN_STEPS * cfg.sim.dt * cfg.decimation
+W_EFF = float(scale_action(torch.ones(1, 2))[0, 1])
+SPIN_THEORY = W_EFF * SPIN_S
 
 secs = env._sections
 narrow = min(secs, key=lambda s: s.width)
@@ -150,12 +161,13 @@ results["종료 판정선 위치"] = ok2
 # 종키는 캐스터가 URDF 상 고정 구슬이라 시뮬에서 구르지 못하고 끌린다
 # (jongky_corridor_env.py 머리주석 참고). 그래서 아래 [4] 에서 벽이 전혀
 # 없는 조건으로 같은 회전을 돌려 대조군을 만든다.
-print(f"\n[3] 최협 구간 제자리 회전  (외접원 R={CIRCUMSCRIBED_R:.4f} m)")
+print(f"\n[3] 최협 구간 제자리 회전  (외접원 R={CIRCUMSCRIBED_R:.4f} m, "
+      f"act=1.0 → {W_EFF:.3f} rad/s 로 {SPIN_S:.1f}초)")
 place(xm, 0.0, 0.0)
 spun = 0.0
 prev_yaw = float(env._robot_yaw()[0])
 hit = False
-for i in range(600):
+for i in range(SPIN_STEPS):
     act = torch.zeros(env.num_envs, 2, device=env.device)
     act[:, 1] = 1.0            # 최대 각속도
     env.step(act)
@@ -184,7 +196,7 @@ place(xw, 0.0, 0.0)
 spun_w = 0.0
 prev_yaw = float(env._robot_yaw()[0])
 hit_w = False
-for i in range(600):
+for i in range(SPIN_STEPS):
     act = torch.zeros(env.num_envs, 2, device=env.device)
     act[:, 1] = 1.0
     env.step(act)
@@ -202,8 +214,9 @@ for i in range(600):
 print(f"    회전량 {spun_w:.2f} rad ({spun_w/6.283:.2f} 바퀴), 충돌={hit_w}")
 ratio = (narrow_spin / spun_w) if spun_w > 1e-6 else 0.0
 print(f"\n    최협/넓은 회전량 비 = {ratio:.2f}")
-print(f"    이론 회전량 (omega_max 1.5 rad/s x 20 s) = 30.0 rad — 둘 다 크게 못 미치면")
-print(f"    복도가 아니라 로봇 동역학(캐스터) 문제다.")
+print(f"    이론 회전량 ({W_EFF:.3f} rad/s x {SPIN_S:.1f} s) = {SPIN_THEORY:.1f} rad "
+      f"— 실측 최협 {narrow_spin:.2f} rad = 이론의 1/{SPIN_THEORY / max(narrow_spin, 1e-6):.1f}")
+print(f"    둘 다 크게 못 미치면 복도가 아니라 로봇 동역학(캐스터) 문제다.")
 # 판정: 최협 구간이 넓은 구간 대비 회전을 못 하는가 (복도 탓인가) 만 본다
 results["최협 구간 회전이 넓은 구간과 동등"] = (not narrow_hit) and ratio > 0.8
 
