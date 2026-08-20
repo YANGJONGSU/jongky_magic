@@ -1,8 +1,15 @@
-"""안내로봇 런치 — Nav2 자율주행 + UI + 음성.
+"""안내로봇 런치 — Nav2 자율주행 + UI + 음성 (+ 층 전환).
 
     ros2 launch jongky_guide guide.launch.py \
         map:=/path/to/fastcampus_10f.yaml \
         waypoints:=~/waypoints_10f.yaml
+
+층이 둘 이상이면 지도와 waypoint 를 손으로 짝지어 주지 말고 대장을 준다.
+`floor` 로 시작 층만 말하면 map·waypoints 를 여기서 뽑아 쓴다 — 10층 지도에
+11층 waypoint 를 얹는 사고를 명령줄에서 없앤다.
+
+    ros2 launch jongky_guide guide.launch.py \
+        floors:=~/floors.yaml floor:=10f start_waypoint:=ev1
 
 음성은 기본으로 꺼져 있다. Whisper 가 젯슨 CPU 를 상당히 먹으므로
 주행이 먼저 안정된 뒤에 켜는 것을 권한다.
@@ -11,22 +18,72 @@
 """
 import os
 
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
+def _resolve_floor(context):
+    """floors.yaml + floor → (map, waypoints).
+
+    launch 인자로 직접 준 map/waypoints 가 언제나 이긴다. 대장을 읽는 것은
+    plain yaml 이다 — guide_mission 이 아직 안 빌드된 상태에서도 런치는 떠야
+    하고, 여기서 못 읽으면 아래 guide_node 가 같은 파일을 다시 읽으며 훨씬
+    친절하게 죽는다.
+    """
+    floors = context.perform_substitution(LaunchConfiguration("floors"))
+    floor = context.perform_substitution(LaunchConfiguration("floor"))
+    map_arg = context.perform_substitution(LaunchConfiguration("map"))
+    wp_arg = context.perform_substitution(LaunchConfiguration("waypoints"))
+    if not floors or not floor:
+        if not map_arg:
+            raise RuntimeError(
+                "map 을 주거나 floors+floor 를 줄 것.\n"
+                "  map:=~/maps/fastcampus_10f.yaml waypoints:=~/waypoints_10f.yaml\n"
+                "  floors:=~/floors.yaml floor:=10f")
+        return []
+
+    path = os.path.expanduser(floors)
+    with open(path) as f:
+        doc = yaml.safe_load(f) or {}
+    entry = (doc.get("floors") or {}).get(floor)
+    if entry is None:
+        have = ", ".join((doc.get("floors") or {}))
+        raise RuntimeError(f"floors.yaml 에 '{floor}' 층이 없다. 있는 층: {have}")
+
+    if not map_arg:
+        context.launch_configurations["map"] = os.path.expanduser(entry.get("map", ""))
+    if wp_arg in ("", "~/waypoints.yaml"):
+        context.launch_configurations["waypoints"] = os.path.expanduser(
+            entry.get("waypoints", ""))
+    return []
+
+
 def generate_launch_description():
     nav_share = get_package_share_directory("jongky_navigation")
 
     args = [
-        DeclareLaunchArgument("map", description="점유 격자 지도 YAML (층마다 다르다)"),
+        DeclareLaunchArgument("map", default_value="",
+                              description="점유 격자 지도 YAML (층마다 다르다). "
+                                          "floors+floor 를 주면 거기서 뽑는다"),
         DeclareLaunchArgument("waypoints", default_value="~/waypoints.yaml",
                               description="teleop_key.py 가 찍어 둔 목적지"),
+        DeclareLaunchArgument(
+            "floors", default_value="",
+            description="층별 지도·waypoint 대장 (fleet/guide_mission 의 floors.yaml). "
+                        "주면 층 전환이 켜진다. guide_mission 이 빌드돼 있어야 한다"),
+        DeclareLaunchArgument("floor", default_value="",
+                              description="기동 층 키 (예: 10f). floors 와 같이 준다"),
+        DeclareLaunchArgument(
+            "floor_detect", default_value="auto",
+            description="층 자동 판정. auto=SSID 가 확실하면 진행, always=매번 사람 확인, "
+                        "off=안 봄. 젯슨이 노트북 핫스팟에 붙어 있으면 건물 SSID 가 "
+                        "안 보이므로 어느 쪽이든 사람에게 묻게 된다"),
         DeclareLaunchArgument("port", default_value="8080"),
         DeclareLaunchArgument("use_voice", default_value="false"),
         DeclareLaunchArgument("voice_model", default_value="tiny"),
@@ -93,6 +150,9 @@ def generate_launch_description():
             "--llm-url", LaunchConfiguration("llm_url"),
             "--follow-url", LaunchConfiguration("follow_url"),
             "--start-waypoint", LaunchConfiguration("start_waypoint"),
+            "--floors", LaunchConfiguration("floors"),
+            "--floor", LaunchConfiguration("floor"),
+            "--floor-detect", LaunchConfiguration("floor_detect"),
         ],
     )
 
@@ -109,4 +169,6 @@ def generate_launch_description():
         ],
     )
 
-    return LaunchDescription(args + [camera, navigation, guide, voice])
+    # map/waypoints 를 정하는 일은 다른 것들이 만들어지기 **전에** 끝나야 한다.
+    return LaunchDescription(
+        args + [OpaqueFunction(function=_resolve_floor), camera, navigation, guide, voice])

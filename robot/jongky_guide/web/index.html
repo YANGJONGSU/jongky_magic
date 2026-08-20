@@ -18,6 +18,12 @@
   header { display: flex; align-items: baseline; gap: 12px; }
   h1 { margin: 0; font-size: 30px; font-weight: 700; letter-spacing: -0.5px; }
   .sub { font-size: 15px; color: #8b93a7; }
+  /* 지금 몇 층인지 늘 보인다. 층을 착각한 채 목적지를 누르는 것을 막는다. */
+  #floor-badge {
+    margin-left: auto; font-size: 20px; font-weight: 700; padding: 6px 14px;
+    border-radius: 999px; background: #223047; border: 1px solid #35507a; color: #cfe0ff;
+  }
+  #floor-badge.unknown { background: #3d2229; border-color: #7a3742; color: #ffd7dd; }
 
   #message {
     font-size: 26px; font-weight: 600; padding: 18px 22px; border-radius: 14px;
@@ -30,7 +36,17 @@
   #distance { font-size: 20px; color: #8b93a7; white-space: nowrap; }
 
   #grid {
-    flex: 1; display: grid; gap: 14px; overflow-y: auto;
+    flex: 1; display: block; overflow-y: auto;
+  }
+  .floor-section { margin-bottom: 18px; }
+  .floor-head {
+    font-size: 17px; color: #8b93a7; margin: 0 0 8px; display: flex;
+    align-items: center; gap: 8px;
+  }
+  .floor-head .here { color: #7fd0a0; }
+  .floor-head .away { color: #f7b731; }
+  .cards {
+    display: grid; gap: 14px;
     grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
     grid-auto-rows: minmax(96px, auto);
   }
@@ -41,6 +57,11 @@
   }
   button:active { transform: scale(.97); background: #4b7bec; }
   button:disabled { opacity: .4; }
+  /* 다른 층 목적지. 누르면 엘리베이터를 타야 한다는 것을 미리 보여 준다. */
+  .cards button.away { border-color: #6b5a2a; background: #2f2a1e; }
+  .cards button .tag {
+    display: block; font-size: 15px; font-weight: 500; color: #f7b731; margin-top: 4px;
+  }
 
   #cancel {
     font-size: 24px; padding: 18px; background: #3d2229; border-color: #7a3742;
@@ -70,21 +91,48 @@
   code { background: #1c212c; padding: 3px 7px; border-radius: 5px; font-size: 16px; }
 
   /* 초기 위치 화면 */
-  #start-panel { display: none; }
+  #start-panel { display: none; overflow-y: auto; }
   #start-panel.show { display: block; }
   #start-panel .hint { color: #9aa4b2; line-height: 1.7; margin: 0 0 18px; }
-  #start-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
-  #start-grid button {
+  #start-grid, #start-floors {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px;
+  }
+  #start-floors { margin-bottom: 16px; }
+  #start-grid button, #start-floors button {
     padding: 16px 10px; font-size: 17px; border-radius: 10px;
     border: 1px solid #3a4252; background: #232936; color: #e8edf4; cursor: pointer;
   }
-  #start-grid button:active { background: #2e3646; }
+  #start-grid button:active, #start-floors button:active { background: #2e3646; }
+  #start-floors button.on { border-color: #4b7bec; background: #26324a; }
+  .section-label { font-size: 15px; color: #8b93a7; margin: 0 0 8px; }
 
   /* 상태별 테두리. waiting/alert/listening 이 빠져 있어서 그 상태에서는
      테두리색이 사라졌다. */
   #message.waiting   { border-color: #c9922e; }
   #message.alert     { border-color: #cf5b4a; }
   #message.listening { border-color: #4a86cf; }
+  #message.transfer  { border-left-color: #4b7bec; }
+  #message.fault     { border-left-color: #fc5c65; }
+
+  /* ── 층 이동 화면 ────────────────────────────────────────────────────
+     엘리베이터 구간은 로봇이 아니라 **사람이 하는 일**이다. 그동안 목적지
+     화면을 덮고, 지금 해 주셔야 하는 일 하나만 크게 띄운다. */
+  #transfer {
+    display: none; flex: 1; flex-direction: column; gap: 18px;
+    padding: 26px; border-radius: 16px;
+    background: #1a2130; border: 2px solid #35507a; overflow-y: auto;
+  }
+  #transfer.show { display: flex; }
+  #transfer.fault { background: #2a1b20; border-color: #7a3742; }
+  #t-step { font-size: 15px; letter-spacing: 1px; color: #7f9bd0; text-transform: uppercase; }
+  #transfer.fault #t-step { color: #e08b96; }
+  #t-message { font-size: 34px; font-weight: 700; line-height: 1.35; }
+  #t-detail { font-size: 20px; color: #9aa4b2; line-height: 1.6; }
+  #t-actions { display: flex; flex-wrap: wrap; gap: 14px; margin-top: auto; }
+  #t-actions button { font-size: 26px; padding: 22px 28px; min-width: 220px; flex: 1; }
+  #t-actions button.abort { background: #3d2229; border-color: #7a3742; flex: 0 0 auto; min-width: 150px; }
+  #t-floors { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
+  #t-floors button { font-size: 24px; padding: 20px 10px; }
 </style>
 </head>
 <body>
@@ -92,6 +140,7 @@
   <header>
     <h1>어디로 가시나요?</h1>
     <span class="sub">가고 싶은 곳을 눌러 주세요</span>
+    <span id="floor-badge" style="display:none"></span>
   </header>
 
   <div id="message">
@@ -99,15 +148,30 @@
     <span id="distance"></span>
   </div>
 
+  <!-- 층 이동 중에는 이것이 화면을 덮는다. 사람이 할 일만 보인다. -->
+  <div id="transfer">
+    <div id="t-step"></div>
+    <div id="t-message"></div>
+    <div id="t-detail"></div>
+    <div id="t-floors"></div>
+    <div id="t-actions"></div>
+  </div>
+
   <!-- 초기 위치를 정하기 전에는 목적지 화면 대신 이게 보인다.
        AMCL 이 초기 위치를 받기 전까지 map->odom 이 안 나오고, 그러면 어떤
        목적지도 가지 않는다. 예전에는 개발 PC 에서 RViz 로 찍는 것이 유일한
-       방법이었다 — 터치스크린만 있는 현장에서는 쓸 수 없었다. -->
+       방법이었다 — 터치스크린만 있는 현장에서는 쓸 수 없었다.
+       층이 있으면 층부터 고른다 — 지도를 갈아끼운 뒤에 위치를 잡아야 한다. -->
   <div id="start-panel">
     <p class="hint">
       로봇이 지금 어디 있는지 알려 주세요.<br>
       아는 지점에 로봇을 놓고 그 이름을 누릅니다.
     </p>
+    <div id="start-floor-wrap" style="display:none">
+      <p class="section-label">몇 층인가요?</p>
+      <div id="start-floors"></div>
+    </div>
+    <p class="section-label" id="start-wp-label">어느 지점인가요?</p>
     <div id="start-grid"></div>
   </div>
 
@@ -122,34 +186,83 @@ const msgBox = document.getElementById('message');
 const msgText = document.getElementById('message-text');
 const distEl = document.getElementById('distance');
 const cancelBtn = document.getElementById('cancel');
+const floorBadge = document.getElementById('floor-badge');
+
+// 서버가 준 층 목록. 층 이동·초기 위치 화면이 공유한다.
+let catalog = {destinations: [], floors: [], multi_floor: false, floor: ''};
 
 async function loadDestinations() {
   const res = await fetch('/api/destinations');
-  const {destinations} = await res.json();
+  catalog = await res.json();
+  renderGrid();
+  buildStart(true);
+}
 
-  if (!destinations.length) {
-    grid.innerHTML = `<div class="empty">
-      등록된 목적지가 없습니다.<br><br>
-      맵핑 주행 중에 <code>teleop_key.py</code> 로 <code>w</code> 를 눌러
-      강의장 앞 위치를 먼저 기록해 주세요.
-    </div>`;
+function renderGrid() {
+  const {floors, destinations, multi_floor, floor} = catalog;
+
+  if (!multi_floor) {                    // 한 층짜리 — 예전 화면 그대로
+    const names = floors.length ? floors[0].destinations
+                                : destinations.map(n => ({name: n, label: n}));
+    if (!names.length) return renderEmpty();
+    grid.innerHTML = '<div class="cards"></div>';
+    const cards = grid.firstChild;
+    for (const d of names) cards.appendChild(card(d, '', false));
     return;
   }
 
+  const any = floors.some(f => f.destinations.length);
+  if (!any) return renderEmpty();
+
   grid.innerHTML = '';
-  for (const name of destinations) {
-    const btn = document.createElement('button');
-    btn.textContent = name;
-    btn.onclick = () => go(name);
-    grid.appendChild(btn);
+  for (const f of floors) {
+    if (!f.destinations.length) continue;
+    const here = f.key === floor;
+    const sec = document.createElement('div');
+    sec.className = 'floor-section';
+    const head = document.createElement('p');
+    head.className = 'floor-head';
+    head.innerHTML = `<b>${f.label}</b>` + (here
+      ? '<span class="here">· 지금 이 층</span>'
+      : '<span class="away">· 엘리베이터를 타야 합니다</span>')
+      + (f.usable ? '' : '<span class="away">· 지도/waypoint 문제로 갈 수 없습니다</span>');
+    sec.appendChild(head);
+    const cards = document.createElement('div');
+    cards.className = 'cards';
+    for (const d of f.destinations) cards.appendChild(card(d, f.key, !here, f.usable));
+    sec.appendChild(cards);
+    grid.appendChild(sec);
   }
 }
 
-async function go(destination) {
+function card(d, floorKey, away, usable = true) {
+  const btn = document.createElement('button');
+  btn.textContent = d.label || d.name;
+  if (away) {
+    btn.className = 'away';
+    const tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.textContent = '🛗 엘리베이터';
+    btn.appendChild(tag);
+  }
+  btn.disabled = !usable;
+  btn.onclick = () => go(d.name, floorKey);
+  return btn;
+}
+
+function renderEmpty() {
+  grid.innerHTML = `<div class="empty">
+    등록된 목적지가 없습니다.<br><br>
+    맵핑 주행 중에 <code>teleop_key.py</code> 로 <code>w</code> 를 눌러
+    강의장 앞 위치를 먼저 기록해 주세요.
+  </div>`;
+}
+
+async function go(destination, floor) {
   const res = await fetch('/api/go', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({destination}),
+    body: JSON.stringify({destination, floor: floor || ''}),
   });
   if (!res.ok) {
     const {error} = await res.json();
@@ -162,7 +275,91 @@ cancelBtn.onclick = () => fetch('/api/cancel', {method: 'POST'});
 const pttBtn = document.getElementById('ptt');
 pttBtn.onclick = () => fetch('/api/listen', {method: 'POST'});
 
+// ── 층 이동 화면 ──────────────────────────────────────────────────────────
+const tPanel = document.getElementById('transfer');
+const tStep = document.getElementById('t-step');
+const tMsg = document.getElementById('t-message');
+const tDetail = document.getElementById('t-detail');
+const tActions = document.getElementById('t-actions');
+const tFloors = document.getElementById('t-floors');
+let tKey = '';   // 같은 화면을 매 폴링마다 다시 그리지 않기 위한 열쇠
+
+const STEP_LABEL = {
+  to_elevator: '엘리베이터로 이동 중',
+  at_elevator: '엘리베이터 앞',
+  boarding: '탑승 대기',
+  riding: '이동 중',
+  exiting: '하차',
+  confirm_floor: '층 확인',
+  swap_map: '지도 교체',
+  relocalize: '위치 재설정',
+  landed: '도착',
+  resume: '안내 재개',
+  fault: '멈춤',
+  aborted: '취소됨',
+};
+
+// 멈춘 화면(fault/aborted)은 사람이 '다시 잡기' 를 누를 때까지 남는다.
+// 무엇이 잘못됐는지 읽을 시간을 주지 않고 사라지면 아무도 원인을 모른다.
+let dismissed = '';
+
+function renderTransfer(t) {
+  const key = JSON.stringify(t);
+  if (key === tKey) return;
+  tKey = key;
+
+  tPanel.classList.toggle('fault', t.state === 'fault');
+  tStep.textContent = STEP_LABEL[t.state] || t.state;
+  tMsg.textContent = t.message || '';
+  tDetail.textContent = t.detail || '';
+
+  const wantsFloor = (t.actions || []).some(a => a.event === 'pick_floor');
+  tFloors.innerHTML = '';
+  if (wantsFloor) {
+    for (const f of (t.floors || [])) {
+      const b = document.createElement('button');
+      b.textContent = f.label;
+      b.disabled = !f.usable;
+      b.onclick = () => sendTransfer('pick_floor', {floor: f.key});
+      tFloors.appendChild(b);
+    }
+  }
+
+  tActions.innerHTML = '';
+  for (const a of (t.actions || [])) {
+    if (a.event === 'pick_floor') continue;      // 위 층 버튼이 대신한다
+    const b = document.createElement('button');
+    b.textContent = a.label;
+    if (a.event === 'abort') b.className = 'abort';
+    b.onclick = () => sendTransfer(a.event);
+    tActions.appendChild(b);
+  }
+
+  // 멈춘 상태에서 빠져나가는 유일한 길. 이걸 안 붙이면 fault 화면이 목적지
+  // 화면과 '여기서 시작' 을 둘 다 덮은 채 아무 버튼도 없이 남는다.
+  if (t.state === 'fault' || t.state === 'aborted') {
+    const b = document.createElement('button');
+    b.textContent = '층·위치 다시 잡기';
+    b.onclick = () => { dismissed = key; tKey = ''; poll(); };
+    tActions.appendChild(b);
+  }
+}
+
+async function sendTransfer(event, extra) {
+  const res = await fetch('/api/transfer', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(Object.assign({event}, extra || {})),
+  });
+  if (!res.ok) {
+    const {error} = await res.json();
+    if (error) alert(error);
+  }
+  tKey = '';    // 눌렀으면 다음 폴링에서 무조건 다시 그린다
+}
+
 // 상태 폴링. 도착·실패는 노드가 판정하므로 화면은 그대로 받아 그리기만 한다.
+let lastFloor = null;
 async function poll() {
   try {
     const s = await (await fetch('/api/status')).json();
@@ -176,15 +373,29 @@ async function poll() {
     cancelBtn.classList.toggle(
       'show', ['navigating', 'waiting', 'alert'].includes(s.status));
 
+    // 층이 바뀌면 목적지 목록도 바뀐다 (지도가 갈렸다)
+    if (s.floor !== undefined && s.floor !== lastFloor) {
+      lastFloor = s.floor;
+      floorBadge.style.display = catalog.multi_floor ? '' : 'none';
+      floorBadge.textContent = s.floor_label || '층 미확인';
+      floorBadge.classList.toggle('unknown', !s.floor);
+      await loadDestinations();
+    }
+
+    // 층 이동 중에는 그 화면이 전부를 덮는다
+    const inTransfer = !!s.transfer && JSON.stringify(s.transfer) !== dismissed;
+    tPanel.classList.toggle('show', inTransfer);
+    if (inTransfer) renderTransfer(s.transfer); else tKey = '';
+
     // 초기 위치가 없으면 목적지 대신 시작 화면을 보여 준다
-    const needStart = s.localized === false;
+    const needStart = s.localized === false && !inTransfer;
     startPanel.classList.toggle('show', needStart);
-    grid.style.display = needStart ? 'none' : '';
-    if (needStart) buildStart();
+    grid.style.display = (needStart || inTransfer) ? 'none' : '';
 
     if (s.follower_m > 0) distEl.textContent += `  ·  뒤 ${s.follower_m.toFixed(1)} m`;
     // 마이크는 STT 가 준비됐고 주행 중이 아닐 때만 보인다
-    pttBtn.classList.toggle('show', s.can_listen && s.status !== 'navigating');
+    pttBtn.classList.toggle(
+      'show', s.can_listen && s.status !== 'navigating' && !inTransfer);
     pttBtn.classList.toggle('listening', s.status === 'listening');
     document.querySelectorAll('#grid button')
       .forEach(b => b.disabled = s.status === 'navigating');
@@ -194,31 +405,60 @@ async function poll() {
 // ── 초기 위치 ─────────────────────────────────────────────────────────────
 const startPanel = document.getElementById('start-panel');
 const startGrid = document.getElementById('start-grid');
-let startBuilt = false;
+const startFloors = document.getElementById('start-floors');
+const startFloorWrap = document.getElementById('start-floor-wrap');
+let startFloor = '';
 
-async function buildStart() {
-  if (startBuilt) return;
-  const {destinations} = await (await fetch('/api/destinations')).json();
+function buildStart(reset) {
+  const floors = catalog.floors || [];
+  if (reset) startFloor = catalog.floor || (floors[0] ? floors[0].key : '');
+
+  startFloorWrap.style.display = catalog.multi_floor ? '' : 'none';
+  if (catalog.multi_floor) {
+    startFloors.innerHTML = '';
+    for (const f of floors) {
+      const b = document.createElement('button');
+      b.textContent = f.label;
+      b.className = f.key === startFloor ? 'on' : '';
+      b.disabled = !f.usable;
+      b.onclick = () => { startFloor = f.key; buildStart(false); };
+      startFloors.appendChild(b);
+    }
+  }
+
+  // 지점 목록. 엘리베이터 앞도 골라야 하므로 목적지가 아니라 waypoint 전부다.
+  let points;
+  if (floors.length) {
+    const f = floors.find(x => x.key === startFloor) || floors[0];
+    points = f ? f.waypoints : [];
+  } else {
+    points = (catalog.destinations || []).map(n => ({name: n, label: n}));
+  }
+
   startGrid.innerHTML = '';
-  for (const name of destinations) {
+  if (!points.length) {
+    startGrid.innerHTML = '<div class="empty">이 층에 등록된 지점이 없습니다.</div>';
+    return;
+  }
+  for (const p of points) {
     const b = document.createElement('button');
-    b.textContent = name;
+    b.textContent = p.label || p.name;
     b.onclick = async () => {
+      b.disabled = true;
       const res = await fetch('/api/start-here', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({waypoint: name}),
+        body: JSON.stringify({waypoint: p.name, floor: catalog.multi_floor ? startFloor : ''}),
       });
       const r = await res.json();
+      b.disabled = false;
       if (!r.ok) alert(r.error);
     };
     startGrid.appendChild(b);
   }
-  startBuilt = true;
 }
 
 loadDestinations();
-buildStart();
 setInterval(poll, 500);
 </script>
 </body>

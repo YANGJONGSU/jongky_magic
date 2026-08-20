@@ -1,0 +1,43 @@
+# waypoint YAML 스키마 — Poi.msg 의 디스크 표현.
+#
+# teleop_key.py 가 쓰고(save_waypoint) guide_node.py·voice_node.py 가 읽는다.
+# 최상위는 지금과 똑같이 **이름을 키로 하는 매핑**이다. 리스트로 바꾸면
+# `self._waypoints[name]` / `list(self._waypoints)` 가 전부 깨지므로 안 바꾼다.
+#
+# 새 필드(display_name, kind, aliases, floor)는 전부 선택이다. 없으면 읽는 쪽이
+# 아래 규칙으로 메운다. 그래서 오늘 현장에 있는 파일이 손대지 않고도 그대로 돈다.
+#
+#   display_name 없음 -> 키를 그대로 쓴다
+#   kind         없음 -> etc (기타)
+#   aliases      없음 -> 없음
+#   floor        없음 -> 파일 이름(waypoints_10f.yaml)에서 뽑고, 그것도 없으면 0
+#
+# 읽는 쪽은 절대 추론하지 않는다. 이름에서 종류를 짐작하는 일은 이관 도구
+# (robot/jongky_bringup/tools/waypoint_doctor.py) 가 한 번만 하고 결과를 파일에
+# 적어 사람이 고칠 수 있게 남긴다. 런타임이 매번 짐작하면 틀린 짐작을 아무도
+# 고칠 수 없다.
+
+# ── 옛 형식. 지금 현장 파일이 이 모양이고, 계속 유효하다 ──────────────────
+10b:
+  position: {x: -6.2433, y: -5.3473, z: 0.0}
+  orientation: {x: 0.0, y: 0.0, z: -0.085553, w: 0.996334}
+  frame_id: map
+
+# ── 새 형식. 필드가 더 있을 뿐 구조는 같다 ───────────────────────────────
+10a:
+  position: {x: -4.6171, y: -6.667, z: 0.0}
+  orientation: {x: 0.0, y: 0.0, z: -0.785371, w: 0.619025}
+  frame_id: map
+  display_name: 10층 A 강의장     # 버튼과 TTS 에 뜨는 이름
+  kind: lecture                   # lecture | elevator | entrance | restroom | etc
+  aliases: [에이강의장, 10에이]    # 발화 매칭용. 없어도 된다
+  floor: 10
+
+ev1:
+  position: {x: 1.0313, y: -8.5454, z: 0.0}
+  orientation: {x: 0.0, y: 0.0, z: 0.591142, w: 0.806568}
+  frame_id: map
+  display_name: 엘리베이터
+  kind: elevator                  # 층 전환이 이 값으로 승강기를 찾는다
+  aliases: [승강기, 엘베]
+  floor: 10

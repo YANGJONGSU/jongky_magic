@@ -8,6 +8,8 @@ ros2 launch jongky_bringup robot.launch.py
 
 | 인자 | 기본값 | |
 |---|---|---|
+| `use_ekf` | `true` | **끄지 말 것.** `odom -> base_footprint` 의 유일한 주인이다 |
+| `use_watchdog` | `true` | 바퀴와 자이로의 회전 불일치를 `/mapping_alert` 로 알린다 |
 | `use_mock` | `false` | 목업 하드웨어. 보드 없이 전 경로 확인 |
 | `use_rviz` | `false` | 젯슨에서는 보통 끄고 개발 PC 에서 따로 띄운다 |
 | `use_lidar` | `true` | 라이다 빼고 주행만 볼 때 `false` |
@@ -16,6 +18,20 @@ ros2 launch jongky_bringup robot.launch.py
 
 두 포트 모두 udev 규칙이 만드는 심링크다. `ttyUSB0/1` 은 부팅 순서에 따라
 바뀌므로 직접 쓰지 않는다.
+
+### EKF 가 `odom -> base_footprint` 를 낸다
+
+`jongky_controllers.yaml` 의 `diff_drive_controller` 는 `enable_odom_tf: false`
+라 TF 를 내지 않는다. 그래서 **`robot_localization` 의 `ekf_node` 가 그 프레임의
+유일한 주인**이다. 없으면 TF 트리가 `base_footprint` 위에서 끊겨 SLAM·Nav2·
+waypoint 저장이 통째로 죽는다 — `use_ekf:=false` 로 끄든, 패키지가 안 깔려
+있든 결과는 같다.
+
+`ros-jazzy-robot-localization` 은 `docker/Dockerfile.robot` 의 apt 목록에 있다.
+젯슨 호스트에는 수동으로도 깔려 있어서 예전에는 목록에서 빠진 것을 모르고
+돌았다. 그 항목을 지우면 이미지를 새로 만드는 순간 TF 가 끊긴다.
+
+`jcheck` 가 `/ekf_filter_node` 와 `/odometry/filtered` 를 확인하는 이유가 이것이다.
 
 ## 올라오는 것 (실측)
 
@@ -98,6 +114,7 @@ ros2 run jongky_bringup teleop_key.py --speed 0.15 --out ~/waypoints_10f.yaml
 건물 WiFi 는 층마다 서브넷이 갈려 있어서 11층에 올라가면 SSH 가 끊긴다.
 
 ```bash
+./fetch_models.sh --check   # 나가기 전, 인터넷 되는 자리에서. 탐지 가중치 확인
 jcheck        # 맵핑 전 점검. /map 이 없으면 주행해 봐야 안 쌓인다
 jmap 10f      # SLAM + rosbag  (터미널 1)
 jdrive 10f    # 텔레옵          (터미널 2)  ← w 로 강의장 앞 waypoint
@@ -124,3 +141,101 @@ bag 을 같이 받는 이유는 현장이 다시 가기 비싸기 때문이다. 
 
 카메라 둘은 동작 확인만 됐고 아직 이 런치에 안 얹혀 있다.
 `use_camera` / `use_tof` 인자로 붙일 것.
+
+## IMX219 화각(HFOV) 실측
+
+**아직 안 했다.** `jongky_guide/tools/follow_service.py` 는 지금 렌즈 공칭값
+62.2도를 쓰고, 사람까지의 거리를 여기서 역산한다.
+
+```
+focal_px = (640/2) / tan(HFOV/2)          # 62.2도 → 530.5 px
+distance = PERSON_HEIGHT_M * focal_px / bbox_높이
+```
+
+**거리 추정이 화각에 직접 비례한다.** 화각이 10% 틀리면 거리도 10% 틀리고,
+"뒤처졌다" 판정 문턱이 그만큼 통째로 밀린다. 아스트라는 `camera_info` 의 K
+행렬에서 57.86도를 실측해 썼지만 IMX219 는 그 경로가 없어서 직접 재야 한다.
+
+값은 **소스에 안 박혀 있다.** 재고 나서 코드를 고칠 필요가 없다:
+
+```bash
+export JONGKY_HFOV_DEG=61.4            # 또는
+python3 follow_service.py --hfov 61.4 --person-height 1.68
+```
+
+### 준비물
+
+줄자, 폭을 정확히 아는 평평한 표적(A0 폼보드·화이트보드·문틀 — 폭 `W`),
+그리고 로봇 자체(카메라를 손에 들지 말 것 — 장착 상태 그대로 재야 한다).
+
+### 1) 프레임 한 장 뜨기
+
+**서비스가 쓰는 파이프라인 그대로** 찍어야 한다. `nvarguscamerasrc` 는 센서
+모드에 따라 크롭이 달라서, 해상도나 모드를 바꾸면 화각 자체가 바뀐다.
+
+표적을 카메라 광축에 **수직**으로, 화면 **가운데**에 오게 세운다. 거리 `D` 는
+줄자로 렌즈 앞면부터 잰다. 2m 를 권한다 — 너무 가까우면 왜곡이, 너무 멀면
+픽셀 분해능이 문제가 된다.
+
+```bash
+python3 - <<'EOF'
+import cv2
+pipe = ("nvarguscamerasrc sensor-id=0 ! "
+        "video/x-raw(memory:NVMM),width=1280,height=720,framerate=30/1 ! "
+        "nvvidconv ! video/x-raw,format=BGRx ! videoconvert ! "
+        "video/x-raw,format=BGR,width=640,height=360 ! appsink")
+cap = cv2.VideoCapture(pipe, cv2.CAP_GSTREAMER)
+for _ in range(15):          # 노출·화이트밸런스가 잡힐 때까지 버린다
+    ok, f = cap.read()
+cv2.imwrite("/tmp/hfov.png", f)
+print(ok, f.shape)           # (360, 640, 3) 이어야 한다
+EOF
+```
+
+### 2) 표적의 좌우 끝 픽셀 읽기
+
+`/tmp/hfov.png` 를 열어 표적 왼쪽 끝 `x1`, 오른쪽 끝 `x2` 를 읽는다
+(GIMP·`eog` 는 커서 좌표를 표시한다). `p = x2 - x1`.
+
+### 3) 계산
+
+```bash
+python3 -c '
+import math
+W, D, p = 1.20, 2.00, 318        # 표적 폭(m), 거리(m), 화면상 폭(px)
+f = p * D / W
+print(f"focal_px {f:.1f}   HFOV {2*math.degrees(math.atan(320/f)):.2f}도")'
+```
+
+위 예시 숫자는 공칭값(62.2도)을 되돌려 주는 값이라 계산이 맞는지 확인하는
+데 쓸 수 있다 — `focal_px 530.0  HFOV 62.24도` 가 나온다.
+
+거리를 바꿔(예: 1.5m·2.5m) 두세 번 재서 **화각이 같게 나오는지** 본다.
+1도 넘게 흔들리면 표적이 광축에 수직이 아니거나 거리 측정이 틀린 것이다.
+
+### 4) 사람 거리로 검증하고 기준 신장 보정
+
+화각을 넣고 서비스를 띄운 뒤, 키를 아는 사람을 줄자로 잰 거리에 세운다.
+
+```bash
+JONGKY_HFOV_DEG=61.4 python3 follow_service.py
+curl -s localhost:8641/follower       # distance_m 과 calib 를 함께 본다
+```
+
+`distance_m` 이 줄자와 어긋나면 남은 오차는 bbox 높이 쪽이다 — 후면 카메라가
+낮게 달려 있어 가까운 사람은 머리나 발이 잘리고, 그만큼 멀게 나온다.
+`PERSON_HEIGHT_M` 은 그 편향까지 흡수하는 **유효값**이라 실제 신장과 달라도 된다.
+
+```
+새 기준 신장 = 지금 기준 신장 × (줄자 거리 / 보고된 거리)
+```
+
+**실제로 쓰는 거리(2~4m)에서** 맞추면 된다. 전 구간에서 맞출 수는 없다.
+
+### 5) 남기기
+
+- `follow_service.py` 의 `DEFAULT_HFOV_DEG` / `DEFAULT_PERSON_HEIGHT_M` 을 고치고
+  주석의 `(미실측)` 을 `(실측 YYYY-MM-DD)` 로 바꾼다. 안 그러면 다음 사람이
+  공칭값을 실측값으로 착각한다
+- 지금 도는 서비스가 어떤 값을 쓰는지는 `curl localhost:8641/follower` 의
+  `calib` 필드에 나온다 (`measured: false` 면 아직 공칭값이다)

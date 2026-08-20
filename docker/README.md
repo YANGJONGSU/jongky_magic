@@ -89,11 +89,11 @@ ros2 launch jongky_control control.launch.py serial_port:=$JONGKY_YAHBOOM_PORT
   호스트 쪽에서 돈다
 - **GPU 런타임 플래그** — 지금은 구동 검증용이라 필요 없다.
   추론을 컨테이너에서 돌릴 때 `--runtime nvidia` 를 붙인다
-- **`robot-localization`** — `robot.launch.py` 가 EKF 를 기본으로 띄우는데
-  apt 목록에 없다. 젯슨에는 수동 설치돼 있어서 지금은 도는데, 이미지를
-  새로 만들면 깨진다
-- **`python3-pil`** — `guide_node.py:173` 의 비압축 이미지 폴백이 쓴다.
-  `package.xml:25` 에는 선언돼 있으나 apt 목록에 없다
+- **SSDLite 가중치** — 이건 이미지가 아니라 **호스트** 문제다.
+  `follow_service.py` 는 컨테이너 밖(젯슨 호스트)에서 돌고, torchvision
+  가중치를 첫 실행 때 인터넷에서 받는다. 층 격리 서브넷에서는 그 다운로드가
+  실패한다. 인터넷 되는 자리에서 미리 받아 둘 것:
+  `robot/jongky_bringup/scripts/fetch_models.sh`
 
 ## 들어 있는 것 (예전에 위 목록에 있던 것들)
 
@@ -101,3 +101,11 @@ ros2 launch jongky_control control.launch.py serial_port:=$JONGKY_YAHBOOM_PORT
   (`Dockerfile.robot:45, :76-83`). apt 판 `orbbec_camera` 로는 우리 카메라
   (PID `0401`)를 못 연다
 - **Nav2 · slam_toolbox** — `Dockerfile.robot:43-44`
+- **`robot-localization`** — EKF. `robot.launch.py` 가 기본으로 띄우고,
+  `jongky_controllers.yaml:93` 이 `enable_odom_tf: false` 라
+  **`odom -> base_footprint` 의 유일한 주인**이다. 없으면 TF 트리가 끊겨
+  SLAM·Nav2 가 통째로 안 된다. 젯슨에 수동 설치돼 있어 예전에는 그냥 돌았고,
+  그래서 빠진 것을 아무도 몰랐다
+- **`python3-pil`** — `guide_node.py` 의 비압축 이미지 폴백(`_latest_jpeg`)이
+  쓴다. `jongky_guide/package.xml` 에 선언돼 있지만 이 이미지는 rosdep 을
+  돌리지 않으므로 apt 목록에 직접 적어야 한다

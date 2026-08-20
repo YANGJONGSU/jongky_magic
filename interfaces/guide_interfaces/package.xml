@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>guide_interfaces</name>
+  <version>0.1.0</version>
+  <description>안내로봇 계층 간 계약 — 목적지 안내 액션, 상태 보고, POI 스키마</description>
+  <maintainer email="you@example.com">jongky</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>rosidl_default_generators</buildtool_depend>
+
+  <!-- Poi.pose 가 PoseStamped 다. waypoint YAML 이 이미 position/orientation/
+       frame_id 를 그 모양으로 들고 있어서 변환 없이 옮겨진다 -->
+  <depend>geometry_msgs</depend>
+  <!-- 액션이 GoalStatus/GoalInfo 를 쓴다 -->
+  <depend>action_msgs</depend>
+
+  <exec_depend>rosidl_default_runtime</exec_depend>
+  <member_of_group>rosidl_interface_packages</member_of_group>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

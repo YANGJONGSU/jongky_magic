@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>guide_mission</name>
+  <version>0.0.1</version>
+  <description>안내로봇 임무 상태머신. 층 전환(엘리베이터)과 층별 자원 대장</description>
+  <maintainer email="you@example.com">jongky</maintainer>
+  <license>MIT</license>
+
+  <!-- ament_python 이다. rclpy 를 임포트하지 않는다 — 상태머신은 ROS 없이
+       돌아야 시험이 로봇 없이 돈다. 실제 행동은 jongky_guide 의 guide_node.py
+       가 Effects 로 주입한다. -->
+  <exec_depend>python3-yaml</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

@@ -28,6 +28,18 @@ ENV DEBIAN_FRONTEND=noninteractive
 #
 # 아스트라는 openni2_camera + 오르베 재배포 OpenNI2 로 붙인다.
 # apt 판 orbbec_camera(SDK v2)로는 안 된다 — 아래 RUN 주석 참조.
+#
+# robot-localization(EKF)은 **빼면 안 된다.** robot.launch.py 가 ekf_node 를
+# 기본으로 띄우고, jongky_controllers.yaml 의 diff_drive_controller 는
+# enable_odom_tf: false 라 odom -> base_footprint 를 아무도 안 낸다 —
+# EKF 가 그 프레임의 유일한 주인이다. 없으면 TF 트리가 base_footprint 위에서
+# 끊겨 SLAM·Nav2·waypoint 저장이 통째로 죽는다. 젯슨에 수동 설치돼 있어서
+# 지금 도는 것뿐이고, 이미지를 새로 만드는 순간 깨진다. 지우지 말 것.
+#
+# python3-pil 도 같다. guide_node.py 의 _latest_jpeg() 가 압축 토픽이 없을 때
+# 원본 Image 를 PIL 로 굽는데, 그 폴백이 조용히 실패하면(예외를 삼킨다)
+# 돌발상황 판단이 "카메라 영상이 없다" 로만 보인다. jongky_guide/package.xml
+# 에는 python3-pil 이 선언돼 있으나 이 이미지는 rosdep 을 돌리지 않는다.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3-vcstool \
       ros-${ROS_DISTRO}-ros2-control \
@@ -42,7 +54,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ros-${ROS_DISTRO}-navigation2 \
       ros-${ROS_DISTRO}-nav2-bringup \
       ros-${ROS_DISTRO}-slam-toolbox \
+      ros-${ROS_DISTRO}-robot-localization \
       ros-${ROS_DISTRO}-openni2-camera \
+      python3-pil \
       python3-colcon-common-extensions \
       build-essential \
       git \
