@@ -7,7 +7,7 @@
 1. **2D SLAM 맵핑 (SLAM Toolbox Online Async)**: RPLIDAR C1 및 오도메트리 기반 실시간 지도 작성
 2. **Nav2 자율 내비게이션**: AMCL 위치 추정, SmacPlanner2D 전역 경로 계획, Regulated Pure Pursuit (RPP) 로컬 경로 추종
 3. **실시간 SLAM 자율주행**: 사전 지도 없이 SLAM 맵핑과 Nav2 자율주행을 동시에 구동
-4. **실차 특성 튜닝 완료**: 속도/가속도 제한($0.40\,\text{m/s}$, $0.30\,\text{m/s}^2$), 풋프린트($148\times 229\,\text{mm}$), C1 유효 거리 반영
+4. **실차 특성 튜닝 완료**: 속도/가속도 제한($0.40\,\text{m/s}$, $0.30\,\text{m/s}^2$), 풋프린트($220\times 170\,\text{mm}$), C1 유효 거리 반영
 
 ---
 

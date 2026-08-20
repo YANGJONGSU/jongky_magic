@@ -15,9 +15,12 @@
   /joint_states  /odom  /imu/data  /scan  /odometry/filtered
   TF(odom -> base_footprint -> ...)  ← odom->base_footprint 는 EKF 가 낸다
 
-아직 없는 것
-  아스트라(astra_camera)가 이미지에 없다. IMX219 는 /dev/video* 자체가
-  안 잡힌다(jetson-io 로 디바이스 트리 설정 필요). TOF 2개는 노드가 없다.
+이 런치가 안 띄우는 것
+  카메라. 아스트라는 이미지에 들어 있고(Dockerfile.robot:45 의 openni2-camera,
+  :76-83 의 오르베 재배포 OpenNI2 덮어쓰기) IMX219 도 리본 재체결로 동작하지만,
+  둘 다 여기서 안 띄운다. 맵핑은 jmap 이 따로 올리고, 안내(guide.launch.py)
+  경로에는 카메라를 올리는 곳이 아예 없어서 VLM 판단이 항상 건너뛰어진다.
+  TOF 2개는 아직 노드가 없다.
 """
 import os
 

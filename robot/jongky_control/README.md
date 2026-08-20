@@ -2,7 +2,7 @@
 
 종키 AMR의 `ros2_control` 컨트롤러 설정. 코드는 없고 설정과 런치뿐이다.
 
-실제 하드웨어 통신은 `jongky_hardware`(예정)가 맡고, 로봇 모델은
+실제 하드웨어 통신은 `jongky_hardware`가 맡고, 로봇 모델은
 `jongky_description`에 있다.
 
 ## 실행
@@ -62,7 +62,7 @@ Unable to parse the value of parameter robot_description as yaml.
 
 - **`base_frame_id: base_footprint`** — 기본값이 `base_link` 라 반드시 바꿔야 한다.
   안 바꾸면 odom 이 바퀴축 높이(33.5mm)를 기준으로 잡혀 지도가 그만큼 뜬다
-- **`wheel_separation: 0.11625`** — 잠정값. 제자리 10바퀴 회전 후
+- **`wheel_separation: 0.11909`** — 잠정값. 제자리 10바퀴 회전 후
   `/odom` yaw 와 실제 3600도를 비교해 보정한다.
   `wheel_separation_multiplier` 로 흡수하면 description 과의 일치를 안 깬다
 - **가속 제한이 낮다** — 야붐 보드가 목표 속도까지 자체 램프를 태운다.

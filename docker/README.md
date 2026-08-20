@@ -85,8 +85,19 @@ ros2 launch jongky_control control.launch.py serial_port:=$JONGKY_YAHBOOM_PORT
 
 ## 아직 안 넣은 것
 
-- **센서 드라이버** — 라이다(`rplidar_ros`), 아스트라(`astra_camera`).
-  각각 별도 검증 후 추가한다
+- **라이다 드라이버** — `rplidar_ros` 는 의도적으로 뺐다 (Dockerfile.robot:22).
+  호스트 쪽에서 돈다
 - **GPU 런타임 플래그** — 지금은 구동 검증용이라 필요 없다.
   추론을 컨테이너에서 돌릴 때 `--runtime nvidia` 를 붙인다
-- **Nav2** — `jongky_navigation` 이 생길 때 함께
+- **`robot-localization`** — `robot.launch.py` 가 EKF 를 기본으로 띄우는데
+  apt 목록에 없다. 젯슨에는 수동 설치돼 있어서 지금은 도는데, 이미지를
+  새로 만들면 깨진다
+- **`python3-pil`** — `guide_node.py:173` 의 비압축 이미지 폴백이 쓴다.
+  `package.xml:25` 에는 선언돼 있으나 apt 목록에 없다
+
+## 들어 있는 것 (예전에 위 목록에 있던 것들)
+
+- **아스트라** — `openni2-camera` + 오르베 재배포 OpenNI2 덮어쓰기
+  (`Dockerfile.robot:45, :76-83`). apt 판 `orbbec_camera` 로는 우리 카메라
+  (PID `0401`)를 못 연다
+- **Nav2 · slam_toolbox** — `Dockerfile.robot:43-44`

@@ -14,6 +14,10 @@
 | `tools/guide_node.py` | 본체. 웹서버 + Nav2 디스패치 + 상태 관리 |
 | `tools/speech.py` | 오프라인 TTS (piper). 없으면 로그만 남기고 넘어간다 |
 | `tools/voice_node.py` | Whisper STT. 별도 프로세스라 죽어도 UI 는 산다 |
+| `tools/listen.py` | Whisper 래퍼. 마이크 녹음 + 무음 구간 판정 |
+| `tools/brain.py` | LLM/VLM. 목적지 해석 폴백과 돌발상황 판단. ollama 에 물어본다 — 기본 주소가 **관제 노트북** `192.168.129.97:11434` 라 층이 갈리면 못 닿고, 그때는 `wait` 로 떨어진다 |
+| `tools/follow_service.py` | 후면 카메라(IMX219) 사람 탐지. **젯슨 호스트**에서 도는 HTTP 서비스다 — 컨테이너 밖이다. 모델은 torchvision `ssdlite320_mobilenet_v3_large`(COCO), 가중치는 **첫 실행 때 인터넷에서 받는다** |
+| `tools/follow_client.py` | 위 서비스를 부르는 쪽. 서비스가 없으면 `present=None` 로 넘어간다 |
 | `web/index.html` | 7인치 터치스크린용 UI |
 | `launch/guide.launch.py` | Nav2 + UI + 음성 |
 
@@ -90,8 +94,25 @@ waypoint 이름이 발화에 들어 있어야 한다. Whisper 가 띄어쓰기�
 
 ## 아직 없는 것
 
-- **후면 사람 추종** — 계획서의 "사람이 잘 따라오는지 뒤쪽 카메라로 확인" 이
-  아직 없다. IMX219 는 동작하므로 YOLO-nano 급 탐지기를 붙이면 된다
+- **이 패키지는 한 번도 빌드된 적이 없다.** `jmap:80` 의 colcon 목록에
+  `jongky_guide` 가 없고 `build/`·`install/` 에도 항목이 없다. 처음 쓸 때는
+  `colcon build --packages-select jongky_guide` 를 따로 돌려야 한다.
+  `guide_node.py:44` 의 `get_package_share_directory("jongky_guide")` 가
+  **모듈 최상위**에서 실행되므로, 빌드 없이 실행하면 `PackageNotFoundError`
+  로 즉사한다
+- **초기 위치를 주는 곳이 없다.** `setInitialPose` / `waitUntilNav2Active` 가
+  저장소 전체에 0건이고 `nav2_params.yaml` 의 amcl 에도 `set_initial_pose` 가
+  없다. AMCL 이 `map->odom` 을 못 내면 `_to_pose()` 가 만든 `frame_id: map`
+  목표를 변환할 수 없다 — 개발 PC 에서 RViz 로 `2D Pose Estimate` 를 찍기
+  전까지 어떤 목적지도 안 간다
+- **카메라를 아무도 안 띄운다.** `guide.launch.py` → `robot.launch.py` 체인에
+  카메라 노드가 없어서 `_latest_jpeg()` 가 항상 `None` 이고,
+  `_handle_obstacle()` 은 매번 판단을 건너뛴다. VLM 경로 전체가 dead code 다
+- **같은 노드를 두 스레드가 spin 한다.** 메인의 `rclpy.spin` 과 워커의
+  `spin_once` 가 같은 전역 executor 를 쓴다. 카메라·`/guide/destination`
+  콜백이 간헐적으로 안 도는 형태로 나타난다
+- **waypoint 이름이 내부 코드다.** `10a` / `ev1` / `m1` 은 사람이 말하지도
+  버튼에서 알아보지도 못한다. 표시 이름을 따로 두는 편이 낫다
 - **층 전환** — 엘리베이터는 자율주행 구간이 아니라 상태 전이 구간으로 짜야
   한다. 버튼을 못 누르고, 좁은 금속 박스라 AMCL 이 어느 층 지도에도 안 맞고,
   로봇은 수직으로 움직이는데 엔코더는 정지라고 한다

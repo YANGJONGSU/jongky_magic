@@ -15,7 +15,7 @@
 | 4 | VDA5050/Nav2 목표 전달 | TODO | TODO |
 | 5 | 층 전환 (필요 시) | TODO | TODO |
 | 6 | Nav2 경로 추종 | TODO | TODO |
-| 7 | ros2_control → CAN FD → 모터 | TODO | TODO |
+| 7 | ros2_control → UART(야붐 보드) → 모터 | TODO | TODO |
 | 8 | RobotStatus / GuideTask result 반환 | TODO | TODO |
 
 ---

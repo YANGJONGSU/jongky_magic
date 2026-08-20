@@ -58,9 +58,9 @@ URDF 의 `<ros2_control><hardware>` 안에 `<param>` 으로 준다.
 | `serial_port` | `/dev/yahboom` | udev 심링크. `99-jongky.rules` 참조 |
 | `baud_rate` | 115200 | |
 | `car_type` | 1 | `CARTYPE_X3`. 틀리면 보드가 명령을 다르게 해석한다 |
-| `counts_per_rev` | 3182 | **[미확정]** 줄자 실측으로 확정할 것 |
+| `counts_per_rev` | 1960 | **[확정]** 줄자 실측 1945 와 무부하 1973 의 절충 |
 | `wheel_radius` | 0.0335 | `jongky_description` 의 값이 자동으로 넘어온다 |
-| `wheel_separation` | 0.11625 | 같음. **[미확정]** 회전 시험으로 확정할 것 |
+| `wheel_separation` | 0.11909 | **[확정]** 제자리 5바퀴 ×3회. `/odom` 역산은 쓰지 말 것 — 그 값이 이 상수에서 나오므로 순환이다 |
 
 `wheel_radius` 와 `wheel_separation` 은 xacro 프로퍼티에서 직접 넘어오므로
 URDF 의 형상과 어긋날 수 없다. 손으로 적지 말 것.
@@ -161,9 +161,15 @@ Failed to acquire lock in 20 seconds. Attempt 1 of 5 failed.
 
 ## 아직 안 한 것
 
-- **IMU 발행.** 보드가 자이로·가속도·자세를 주고 `YahboomBoard` 가 파싱까지
-  하는데 아직 토픽으로 내보내지 않는다. `sensor_msgs/Imu` 로 발행할 것.
-  자이로 z 부호 반전을 잊지 말 것
-- **배터리 발행.** 마찬가지로 `sensor_msgs/BatteryState` 로
-- **실물 검증.** 지금까지는 시뮬레이터로만 확인했다. 젯슨(aarch64)에서
-  빌드해 실제 보드로 돌려봐야 한다
+- **배터리 발행.** `sensor_msgs/BatteryState` 로 내보낼 것. 지금은
+  `jongky_system.cpp:221-225` 가 10.5V 아래에서 경고 로그만 남긴다
+
+## 끝난 것 (예전에 여기 "아직 안 한 것" 으로 적혀 있던 것들)
+
+- **IMU 발행** — 된다. `jongky_system.cpp:243-249` 가 핸들을 잡고
+  `:369-389` 가 orientation·gyro·accel 을 채운다.
+  `jongky_controllers.yaml:21-42` 의 `imu_sensor_broadcaster` 가 실측 공분산과
+  함께 발행하고, `control.launch.py:87-93` 이 `/imu/data` 로 리맵한다
+- **실물 검증** — 됐다. 젯슨에서 빌드해 실차로 돌렸고, 엔코더 원점 버그를
+  실차에서 잡았다(`docs/troubleshooting.md:44-61`). IMU 공분산도 10층 주행
+  bag 에서 실측했다

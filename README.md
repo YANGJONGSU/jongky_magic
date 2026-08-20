@@ -42,30 +42,44 @@ jongky_magic/
 
 | | A — 플랫폼/주행 | B — 임무/관제 | C — 인식/인터랙션 |
 |---|---|---|---|
-| 소유 | `robot/`, `sim/` | `fleet/`, `comms/`, `interfaces/` | `perception/`, POI, 월드 자산 |
-| 핵심 | URDF, ros2_control, CAN FD, Nav2, SLAM | 임무 상태머신, VDA5050, Open-RMF, Zenoh | VLM, POI 매핑, 뎁스 카메라, 센서 배치 |
+| 소유 | `robot/`, `sim/` | `fleet/`, `comms/`, `interfaces/` | `robot/jongky_guide/`, POI, 월드 자산 |
+| 핵심 | URDF, ros2_control, UART(야붐 보드), Nav2, SLAM | 임무 상태머신, VDA5050, Open-RMF, Zenoh | VLM, POI 매핑, 뎁스 카메라, 센서 배치 |
 
 ## 진행 상태
 
-현재 G0(계약) 단계 — 저장소 뼈대와 규약 문서 작성 완료, `interfaces/`의 stub 노드와 CI는 아직 없음.
-게이트 전체 흐름은 [docs/collaboration.md](docs/collaboration.md#4-진척-게이트)에서 확인하세요.
+로봇 스택은 실물에서 돈다. URDF·ros2_control·야붐 보드 하드웨어 인터페이스·Nav2·
+slam_toolbox·EKF 가 모두 실차에서 검증됐고, 10·11층 지도와 waypoint 를 실제로 찍었다.
+안내 기능(웹 UI·TTS·STT·Nav2 디스패치·후면 사람 추종·VLM 판단)도 `robot/jongky_guide/`
+에 구현돼 있다 — **다만 아직 한 번도 빌드·실행된 적이 없다.**
 
-메쉬는 A 트랙의 G6(실물)만 막습니다 — 나머지 트랙은 지금 바로 진행하면 됩니다.
+시뮬 쪽은 Isaac Lab 복도 env 와 DreamerV3 래퍼가 있고, SLAM 지도에서 복도 기하를
+뽑아 세우는 파이프라인까지 있다. **학습은 아직 안 돌렸다.**
+
+여전히 비어 있는 것: `interfaces/guide_interfaces`, `fleet/*`, `comms/zenoh_bridge`
+(전부 README 3줄), CI 워크플로, 그리고 **층 전환**(SSID 판정 + `map_server` 의
+`load_map`) — 코드에 흔적이 없다.
+
+게이트 전체 흐름은 [docs/collaboration.md](docs/collaboration.md#4-진척-게이트)에서 확인하세요.
 
 ## 시작하기
 
-> TODO — G0 stub 노드 완성 후 실제 실행 경로로 갱신
+```bash
+# 목업 하드웨어 (보드 없이)
+ros2 launch jongky_bringup robot.launch.py use_mock:=true
 
+# 실물
+ros2 launch jongky_bringup robot.launch.py
+
+# 맵핑 (현장 스크립트 — 카메라·SLAM·RViz 까지 한 번에)
+jmap 10f
+
+# 안내 (지도와 waypoint 를 인자로 준다)
+ros2 launch jongky_guide guide.launch.py \
+    map:=/path/fastcampus_10f.yaml waypoints:=~/waypoints_10f.yaml
 ```
-# 시뮬레이션 (예정)
-ros2 launch jongky_bringup guide.launch.py use_sim:=true
 
-# 목업 하드웨어 (예정)
-ros2 launch jongky_bringup guide.launch.py use_mock:=true
-
-# 실물 (예정, G6 이후)
-ros2 launch jongky_bringup guide.launch.py
-```
+> `jongky_guide` 는 `jmap` 의 빌드 목록에 없다. 처음 쓸 때는
+> `colcon build --packages-select jongky_guide` 를 따로 돌려야 한다.
 
 ## 기여 규칙
 
