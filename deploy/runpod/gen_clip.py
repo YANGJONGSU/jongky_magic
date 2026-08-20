@@ -18,6 +18,7 @@
 """
 import argparse
 import os
+import re
 import time
 
 from gradio_client import Client, handle_file
@@ -53,7 +54,9 @@ def main():
                    help="실패했을 때 들여다볼 서버 로그")
     a = p.parse_args()
 
-    prompt = open(a.prompt_file).read().strip()
+    # 한 줄로 접는다 — 서버가 줄 단위로 쪼개서 한 줄당 영상을 만든다
+    # (gradio_server_v2w.py:428). 아래 run_batch.py 의 같은 처리 참조.
+    prompt = re.sub(r"\s+", " ", open(a.prompt_file).read()).strip()
     print("프롬프트 %d자" % len(prompt))
     print("씨앗 %s · %s · %d프레임 · %d스텝" %
           (os.path.basename(a.seed_video), a.resolution, a.length, a.steps))

@@ -93,9 +93,12 @@ torch 는 numpy 변환이 통째로 죽어 있다.
 ## 클립 생성
 
 ```bash
-python3 deploy/runpod/gen_clip.py --seed-video deploy/runpod/seeds/corridor_10f.mp4 \
-  --prompt-file deploy/runpod/seeds/prompt_v1.txt
+python3 deploy/runpod/gen_clip.py \
+  --seed-video deploy/runpod/seeds/corridor_10f_0330.mp4 \
+  --prompt-file deploy/runpod/seeds/cond_1_low_obstacles.txt
 ```
+
+씨앗 파일명은 `corridor_{층}_{초}.mp4` 형식이다 (`corridor_10f_0330.mp4` = 10층 330초 지점).
 
 한 번에 121프레임(약 5초)이다. 20분짜리를 넣어 20분을 받는 물건이 아니다.
 범위는 길이가 아니라 **씨앗 지점 수**로 넓힌다 — 길게 뽑을수록 복도 폭과
@@ -115,7 +118,8 @@ nohup python3 /workspace/jongky_magic/deploy/runpod/run_batch.py \
 tail -f /workspace/batch.log
 ```
 
-씨앗 14지점 × 조건 4가지 = 56개. A40 에서 클립당 약 8.7분이므로 **8시간**쯤 걸린다.
+씨앗 16지점 × 조건 6가지 = 73개. 조건 5(엘리베이터)·6(사물함)은 그것이 실제로
+보이는 지점에만 적용된다. A40 에서 클립당 약 8.7분이므로 **10.6시간**쯤 걸린다.
 
 ### 왜 이 설정인가
 
@@ -139,7 +143,7 @@ tail -f /workspace/batch.log
 ### 씨앗을 고른 방법
 
 `make_seed.py scan` 으로 15초마다 표본을 뽑아 159장을 만든 뒤, 아래 기준으로
-14지점을 골랐다.
+골랐다. 엘리베이터 지점 2개는 그 조건을 위해 따로 추가해 16개가 됐다.
 
 | 기준 | 값 | 왜 |
 |---|---|---|
@@ -152,3 +156,29 @@ tail -f /workspace/batch.log
 프레임이 통과한다 — 실제로 그렇게 두 개를 잘못 골랐다. 카메라가 바닥에서
 25cm 라 대부분의 프레임은 바닥과 옆벽만 본다. 원근선 개수의 중앙값이 0~1 인
 게 그 뜻이다. 복도가 뻗어 보이는 프레임 자체가 소수다.
+
+## 프롬프트는 반드시 한 줄이어야 한다
+
+`gradio_server_v2w.py:428` 이
+
+```python
+prompts = prompt.replace("\r", "").split("\n")
+total_video = repeat_generation * len(prompts)
+```
+
+로 프롬프트를 **줄 단위로 쪼개서 한 줄당 영상을 하나씩** 만든다.
+
+첫 배치에서 조건 파일이 75자마다 줄바꿈돼 있었다. 그래서 실제로 모델에 간
+프롬프트는
+
+> `The same indoor office hallway with low objects left on the floor along the`
+
+였다. 문장이 "along the" 에서 끊겨 **무엇을 놓으라는 건지 말하지도 못한다.**
+결과 클립에는 주문한 가방·케이블·상자가 없었고, 대신 모델이 복도에 흔한 것을
+알아서 채워 사람이 지나갔다. 나머지 줄들은 각각 별도 영상이 됐다 — 파일명의
+`_seed43_2_` 와 `route  a backpack lying flat, ...` 같은 중간 조각이 그 흔적이다.
+
+측정했던 19.3분도 클립 하나가 아니라 **한 줄당** 시간이었다.
+
+`run_batch.py` 와 `gen_clip.py` 는 이제 보내기 전에 공백을 접어 한 줄로 만든다.
+조건 파일을 직접 고칠 때도 **줄바꿈 없이** 쓸 것.

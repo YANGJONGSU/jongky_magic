@@ -25,6 +25,7 @@ import fnmatch
 import glob
 import json
 import os
+import re
 import time
 
 from gradio_client import Client, handle_file
@@ -123,7 +124,13 @@ def main():
     c = Client(a.url, verbose=False)
     times = []
     for i, (sv, cf) in enumerate(jobs, 1):
-        prompt = open(cf, encoding="utf-8").read().strip()
+        # 줄바꿈을 반드시 없앤다. gradio_server_v2w.py:428 이
+        #     prompts = prompt.replace("\r", "").split("\n")
+        # 로 프롬프트를 줄 단위로 쪼개고 **한 줄당 영상을 하나씩** 만든다.
+        # 여러 줄로 보내면 각 클립이 문장 조각만 받는다 — 첫 배치에서
+        # "...low objects left on the floor along the" 에서 끊긴 줄이
+        # 그대로 프롬프트가 돼서, 무엇을 놓으라는 건지 말하지도 못했다.
+        prompt = re.sub(r"\s+", " ", open(cf, encoding="utf-8").read()).strip()
         before = set(glob.glob(os.path.join(a.outputs, "*.mp4")))
         t0 = time.time()
         eta = ""
