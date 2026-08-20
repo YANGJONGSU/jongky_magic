@@ -109,6 +109,20 @@ else
 fi
 say "GPU=$GPUNAME cap=$CAP · 드라이버 지원 CUDA ${DRV_MAX:-?} → torch $TAG"
 
+# --- 사전점검 게이트 ------------------------------------------------------
+# 60GB 를 받기 **전에** GPU 가 실제로 컨텍스트를 만들 수 있는지 확인한다.
+# 지난 파드에서 이 순서가 거꾸로였다: 다 받고 venv 다 만든 뒤에야
+# 컨텍스트 생성이 안 된다는 걸 알았고, 그건 파드를 바꾸는 것 말고
+# 방법이 없는 종류였다. 여기서 막으면 잃는 게 없다.
+if [ "${SKIP_PREFLIGHT:-0}" != "1" ]; then
+  bash "$(dirname "$0")/preflight.sh" || {
+    echo
+    echo "사전점검에서 걸렸다. 체크포인트는 받지 않았다."
+    echo "파드를 Terminate 하고 새로 Deploy 한 뒤 다시 시작하면 된다."
+    exit 1
+  }
+fi
+
 if ! "$PY" -c "import torch" 2>/dev/null; then
   say "torch 설치 ($TAG)"
   "${PIP[@]}" torch torchvision torchaudio --index-url "$IDX" || exit 1
