@@ -55,25 +55,33 @@ say "python $PYVER"
 [ "$PYVER" = "3.10" ] || die "python 3.10 이 아니다 ($PYVER).
    템플릿을 runpod/pytorch:2.2.0-py3.10-cuda12.1.1-devel-ubuntu22.04 로 띄울 것."
 
-"$PY" -c 'import torch' 2>/dev/null \
-  || die "이미지에 torch 가 없다. 템플릿이 잘못됐다."
-
-# ── 3. 이미지의 torch 가 실제로 할당되는지 ────────────────────────────────────
-# is_available() 로는 부족하다. 지난 파드가 True 를 내면서 할당에서 죽었다.
-say "torch 실할당 확인"
-"$PY" - <<'PYEOF' || die "이미지의 torch 로 GPU 할당이 안 된다. 사전점검이 통과했는데 여기서 죽으면 torch 쪽이다 — 이 출력을 그대로 가져올 것."
-import torch
-print("  torch", torch.__version__, "· cuda", torch.version.cuda)
-cap = torch.cuda.get_device_capability(0)
-print("  GPU", torch.cuda.get_device_name(0), "· sm_%d%d" % cap)
-# cu121 로 빌드된 torch 2.2 는 sm_90 까지다. 5090(sm_120) 급에서는 GPU 를 아예
-# 못 본다. 그건 이 템플릿으로 해결되지 않으니 미리 세운다.
-if cap[0] >= 10:
-    raise SystemExit(
-        "  !! sm_%d%d 는 이 템플릿의 cu121 torch 가 지원하지 않는다.\n"
-        "     GPU 를 4090/A100/L40S 급으로 바꾸거나 다른 템플릿을 써야 한다." % cap)
-x = torch.randn(4000, 4000, device="cuda")
-print("  할당·실연산 OK", float((x @ x).sum()))
+# ── 3. GPU 세대 확인 (torch 를 쓰지 않는다) ──────────────────────────────────
+# 여기서 torch 로 검사하면 안 된다. 이 단계는 4단계가 torch 를 고치기 **전**에
+# 도는데, 앞선 실행이 torch 를 망가뜨려 놨으면 3단계가 먼저 죽어서 스크립트가
+# 자기 자신을 고칠 수 없게 된다. 실제로 그렇게 막혔다 — 재실행이 안 되는
+# 검사는 검사가 아니라 함정이다.
+#
+# compute capability 는 드라이버에서 바로 읽을 수 있다. 파이썬 패키지가 필요 없다.
+say "GPU 세대 확인"
+"$PY" - <<'PYEOF' || die "GPU 세대를 못 읽거나 이 템플릿으로 못 쓰는 GPU 다"
+import ctypes, sys
+cu = ctypes.CDLL("libcuda.so.1")
+if cu.cuInit(0):
+    sys.exit("  !! cuInit 실패 — preflight 를 먼저 볼 것")
+dev = ctypes.c_int()
+if cu.cuDeviceGet(ctypes.byref(dev), 0):
+    sys.exit("  !! cuDeviceGet 실패")
+maj, mnr = ctypes.c_int(), ctypes.c_int()
+# CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR=75, MINOR=76
+cu.cuDeviceGetAttribute(ctypes.byref(maj), 75, dev)
+cu.cuDeviceGetAttribute(ctypes.byref(mnr), 76, dev)
+name = ctypes.create_string_buffer(128)
+cu.cuDeviceGetName(name, 128, dev)
+print("  %s · sm_%d%d" % (name.value.decode(), maj.value, mnr.value))
+# cu121 로 빌드된 torch 는 sm_90 까지다. 5090(sm_120) 급은 GPU 를 아예 못 본다.
+if maj.value >= 10:
+    sys.exit("  !! sm_%d%d 는 이 템플릿의 cu121 torch 가 지원하지 않는다.\n"
+             "     GPU 를 4090/A40/A100/L40S 급으로 바꿀 것." % (maj.value, mnr.value))
 PYEOF
 
 # ── 4. torch/numpy 를 알려진 조합으로 맞춘다 ────────────────────────────────
