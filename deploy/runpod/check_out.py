@@ -53,6 +53,8 @@ def main():
     p.add_argument("--outputs", default="outputs")
     p.add_argument("--n", type=int, default=3, help="최근 몇 개를 볼지")
     p.add_argument("--out", default="/workspace/check.jpg")
+    p.add_argument("--log", default="/workspace/batch.log",
+                   help="manifest 가 비었을 때 여기서 씨앗·조건을 복원한다")
     p.add_argument("--width", type=int, default=380)
     a = p.parse_args()
 
@@ -66,17 +68,38 @@ def main():
             if r.get("ok") and r.get("out"):
                 recs.append(r)
     if not recs:
-        raise SystemExit("아직 완료된 클립이 없다: %s" % a.manifest)
+        # manifest 는 predict 가 정상 반환해야 쓰인다. 서버가 파일을 저장했는데
+        # 클라이언트 쪽에서 예외가 나면 결과물은 있고 기록만 없는 상태가 된다.
+        # 그때는 배치 로그의 "[i/N] 씨앗 × 조건" 줄과 outputs 의 파일 시각을
+        # 순서대로 맞춰 복원한다.
+        print("manifest 에 완료 기록이 없다 — 로그와 출력 파일로 복원한다")
+        started = []
+        if os.path.isfile(a.log):
+            for ln in open(a.log, encoding="utf-8", errors="replace"):
+                if ln.startswith("[") and "] " in ln and " × " in ln:
+                    body = ln.split("] ", 1)[1].split(" · ")[0].strip()
+                    sv, _, cd = body.partition(" × ")
+                    started.append((sv.strip(), cd.strip()))
+        outs = sorted(glob.glob(os.path.join(a.outputs, "*.mp4")),
+                      key=os.path.getmtime)
+        for i, o in enumerate(outs[-a.n:]):
+            k = len(outs) - a.n + i
+            sv, cd = started[k] if k < len(started) else ("(모름)", "(모름)")
+            recs.append({"seed_file": sv, "cond": cd, "out": [os.path.basename(o)]})
+        if not recs:
+            raise SystemExit("outputs 에 mp4 가 없다: %s" % a.outputs)
 
     rows = []
     for r in recs[-a.n:]:
         seed = os.path.join(a.seeds_dir, r["seed_file"])
         gen = os.path.join(a.outputs, r["out"][0])
-        if not (os.path.isfile(seed) and os.path.isfile(gen)):
-            print("건너뜀:", r["seed_file"]); continue
-        s0 = frames(seed, [0.0])[0]
+        if not os.path.isfile(gen):
+            print("건너뜀 (출력 없음):", r["out"][0]); continue
+        s0 = frames(seed, [0.0])[0] if os.path.isfile(seed) else None
         g0, g1, g2 = frames(gen, [0.0, 0.5, 1.0])
-        cells = [label(s0, "SEED  " + r["seed_file"].replace("corridor_", ""), a.width)]
+        cells = []
+        if s0 is not None:
+            cells.append(label(s0, "SEED  " + r["seed_file"].replace("corridor_", ""), a.width))
         for im, t in ((g0, "생성 0%"), (g1, "생성 50%"), (g2, "생성 100%")):
             if im is None:
                 continue
