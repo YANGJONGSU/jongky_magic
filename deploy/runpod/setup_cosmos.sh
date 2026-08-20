@@ -104,8 +104,13 @@ say "torch $TORCH_V (cu121) · numpy<2 로 맞춘다"
 # opencv-python 5.0 은 numpy>=2 로 빌드돼서 numpy 1.x 위에서는 배열을 주고받을
 # 때 깨진다. import 는 통과하므로 눈에 안 띈다 — mmgp 와 같은 모양이다.
 # 4.x 는 numpy 1.x 와 맞는다.
+# optimum-quanto 도 고정한다. requirements 는 mmgp==3.1.2 만 박아놨고
+# quanto 는 mmgp 가 의존성으로 끌어오면서 판올림된 게 들어왔다.
+# 0.2.7 이후 판은 state_dict 에서 `<모듈>.weight_qtype` 을 pop 하는데
+# 이 체크포인트에는 그 키가 없다 — `weight._data`(I8) 와 `weight._scale`(F32)
+# 만 들어 있는 예전 형식이다. 그래서 T5 인코더 로딩이 KeyError 로 죽었다.
 "$PY" -m pip install --no-input -q "numpy<2" "opencv-python<5" \
-  || die "numpy/opencv 고정 실패"
+  "optimum-quanto==0.2.7" || die "numpy/opencv/quanto 고정 실패"
 
 # 올린 조합이 실제로 쓸 수 있는지: 할당 + mmgp 가 필요로 하는 dtype
 "$PY" - <<'PYEOF' || die "torch 를 올렸는데도 조건을 못 맞춘다"
@@ -120,7 +125,8 @@ PYEOF
 # 의존성으로 torch 나 numpy 를 다시 움직이면 방금 맞춘 게 도로 깨진다.
 "$PY" - > "$CONS" <<'PYEOF'
 import importlib.metadata as md
-for p in ("torch", "torchvision", "torchaudio", "numpy", "opencv-python"):
+for p in ("torch", "torchvision", "torchaudio", "numpy",
+          "opencv-python", "optimum-quanto"):
     try: print("%s==%s" % (p, md.version(p)))
     except md.PackageNotFoundError: pass
 PYEOF
@@ -203,6 +209,7 @@ JEOF
 # 들어가고 거기서 torch.uint16 을 만지는데, 패키지 __init__ 은 그걸 안 건드린다.
 # 그래서 **서버 파일이 실제로 쓰는 심볼을** 그대로 불러본다.
 say "import 검증"
+CKPT_DIR="$CKPT" T5_NAME="T5XXLEncoder_11B_quanto_int8.safetensors" \
 "$PY" - <<'PYEOF' || die "import 검증 실패 — 위 traceback 을 그대로 가져올 것"
 import importlib
 for m in ("torch", "numpy", "transformers", "optimum.quanto", "gradio",
@@ -220,6 +227,16 @@ a = np.zeros((8, 8, 3), np.uint8)
 assert cv2.cvtColor(a, cv2.COLOR_RGB2BGR).shape == (8, 8, 3)
 assert torch.from_numpy(a).numpy().shape == (8, 8, 3)
 print("  ok numpy 왕복 (cv2 · torch)")
+
+# T5 인코더를 실제로 읽어본다. 두 번 다 여기서 죽었는데 두 번 다 import
+# 검사는 통과했다 — 양자화 형식이 안 맞는 건 파일을 실제로 읽어야만 드러난다.
+# 30초쯤 걸리지만, 서버를 띄우고 5분 기다렸다가 같은 자리에서 죽는 것보다 낫다.
+import os
+_p = os.path.join(os.environ.get("CKPT_DIR", "checkpoints"),
+                  "text_encoder", os.environ["T5_NAME"])
+from mmgp import offload as _off
+_off.fast_load_transformers_model(_p)
+print("  ok T5 인코더 실제 로딩")
 PYEOF
 
 echo
