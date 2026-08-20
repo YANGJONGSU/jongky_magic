@@ -80,11 +80,13 @@ def main():
                     body = ln.split("] ", 1)[1].split(" · ")[0].strip()
                     sv, _, cd = body.partition(" × ")
                     started.append((sv.strip(), cd.strip()))
+        # outputs 에는 배치 이전에 손으로 돌린 결과도 섞여 있다. 전체를 인덱스로
+        # 맞추면 그만큼 어긋난다 — 배치가 시작한 작업 수만큼만 뒤에서 끊어서
+        # 순서대로 짝짓는다.
         outs = sorted(glob.glob(os.path.join(a.outputs, "*.mp4")),
-                      key=os.path.getmtime)
-        for i, o in enumerate(outs[-a.n:]):
-            k = len(outs) - a.n + i
-            sv, cd = started[k] if k < len(started) else ("(모름)", "(모름)")
+                      key=os.path.getmtime)[-len(started):] if started else []
+        pairs = list(zip(started, outs))[-a.n:]
+        for (sv, cd), o in pairs:
             recs.append({"seed_file": sv, "cond": cd, "out": [os.path.basename(o)]})
         if not recs:
             raise SystemExit("outputs 에 mp4 가 없다: %s" % a.outputs)
