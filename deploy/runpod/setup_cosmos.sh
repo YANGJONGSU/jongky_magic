@@ -126,8 +126,11 @@ PYEOF
 # transformer_choices 순서: [14B, 14B_int8, 7B, 7B_int8] → int8 을 쓴다.
 # profile 은 VRAM 이 넉넉하면 1(가장 빠름), 아니면 2(RAM 으로 오프로딩).
 VRAM_MB="$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1)"
-if [ "${VRAM_MB:-0}" -ge 40000 ]; then PROFILE=1; else PROFILE=2; fi
-say "VRAM ${VRAM_MB}MiB → profile $PROFILE"
+# profile 1 은 오프로딩 없이 돌아 가장 빠르지만 VRAM 24GB + RAM 48GB 를 요구한다.
+# 둘 중 하나라도 모자라면 2(RAM 으로 오프로딩)로 간다.
+RAM_GB="$(free -g | awk '/^Mem:/{print $2}')"
+if [ "${VRAM_MB:-0}" -ge 24000 ] && [ "${RAM_GB:-0}" -ge 45 ]; then PROFILE=1; else PROFILE=2; fi
+say "VRAM ${VRAM_MB}MiB · RAM ${RAM_GB}GB → profile $PROFILE"
 cat > "$REPO/gradio_config_v2w.json" <<JEOF
 {"attention_mode": "sdpa", "transformer_filename": "$TF", "text_encoder_filename": "T5XXLEncoder_11B_quanto_int8.safetensors", "compile": "", "profile": $PROFILE}
 JEOF
@@ -143,8 +146,14 @@ print("  arch_list", torch.cuda.get_arch_list())
 assert torch.cuda.is_available(), "CUDA 를 못 본다"
 cap = torch.cuda.get_device_capability(0)
 print("  device", torch.cuda.get_device_name(0), "cap", cap)
-assert "sm_%d%d" % cap in torch.cuda.get_arch_list(), \
-    "이 torch 빌드는 이 GPU(sm_%d%d)를 지원하지 않는다 — CUDA 빌드를 바꿔야 한다" % cap
+# CUDA 는 같은 major 세대 안에서 바이너리 호환이다 — sm_86 큐빈이 sm_89(Ada)
+# 에서 그대로 돈다. RTX 4090/RTX 5000 Ada 가 sm_86 까지만 담긴 표준 휠로 도는
+# 이유가 이것이다. 정확히 일치하는지 보면 멀쩡한 설치를 실패로 판정한다.
+arch = torch.cuda.get_arch_list()
+same_major = [a for a in arch if a.startswith("sm_%d" % cap[0])]
+assert same_major or ("sm_%d%d" % cap) in arch, (
+    "이 torch 빌드에 sm_%d.x 계열이 없다 (%s) — CUDA 빌드를 바꿔야 한다"
+    % (cap[0], ", ".join(arch)))
 a = torch.randn(4000, 4000, device="cuda"); (a @ a).sum().item()
 print("  실연산 OK")
 PYEOF
