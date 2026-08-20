@@ -68,6 +68,23 @@
 
   .empty { color: #8b93a7; font-size: 19px; line-height: 1.7; padding: 20px; }
   code { background: #1c212c; padding: 3px 7px; border-radius: 5px; font-size: 16px; }
+
+  /* 초기 위치 화면 */
+  #start-panel { display: none; }
+  #start-panel.show { display: block; }
+  #start-panel .hint { color: #9aa4b2; line-height: 1.7; margin: 0 0 18px; }
+  #start-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  #start-grid button {
+    padding: 16px 10px; font-size: 17px; border-radius: 10px;
+    border: 1px solid #3a4252; background: #232936; color: #e8edf4; cursor: pointer;
+  }
+  #start-grid button:active { background: #2e3646; }
+
+  /* 상태별 테두리. waiting/alert/listening 이 빠져 있어서 그 상태에서는
+     테두리색이 사라졌다. */
+  #message.waiting   { border-color: #c9922e; }
+  #message.alert     { border-color: #cf5b4a; }
+  #message.listening { border-color: #4a86cf; }
 </style>
 </head>
 <body>
@@ -80,6 +97,18 @@
   <div id="message">
     <span id="message-text">목적지를 선택해 주세요</span>
     <span id="distance"></span>
+  </div>
+
+  <!-- 초기 위치를 정하기 전에는 목적지 화면 대신 이게 보인다.
+       AMCL 이 초기 위치를 받기 전까지 map->odom 이 안 나오고, 그러면 어떤
+       목적지도 가지 않는다. 예전에는 개발 PC 에서 RViz 로 찍는 것이 유일한
+       방법이었다 — 터치스크린만 있는 현장에서는 쓸 수 없었다. -->
+  <div id="start-panel">
+    <p class="hint">
+      로봇이 지금 어디 있는지 알려 주세요.<br>
+      아는 지점에 로봇을 놓고 그 이름을 누릅니다.
+    </p>
+    <div id="start-grid"></div>
   </div>
 
   <div id="grid"></div>
@@ -141,7 +170,19 @@ async function poll() {
     msgBox.className = s.status;
     distEl.textContent = s.status === 'navigating' && s.distance > 0
       ? `${s.distance.toFixed(1)} m 남음` : '';
-    cancelBtn.classList.toggle('show', s.status === 'navigating');
+    // 취소는 주행 중뿐 아니라 **사람을 기다리는 중**과 **위급 정지** 에서도
+    // 눌러야 한다. 예전에는 navigating 일 때만 보여서, 정작 멈춰 선 상태에서
+    // 취소할 방법이 없었다.
+    cancelBtn.classList.toggle(
+      'show', ['navigating', 'waiting', 'alert'].includes(s.status));
+
+    // 초기 위치가 없으면 목적지 대신 시작 화면을 보여 준다
+    const needStart = s.localized === false;
+    startPanel.classList.toggle('show', needStart);
+    grid.style.display = needStart ? 'none' : '';
+    if (needStart) buildStart();
+
+    if (s.follower_m > 0) distEl.textContent += `  ·  뒤 ${s.follower_m.toFixed(1)} m`;
     // 마이크는 STT 가 준비됐고 주행 중이 아닐 때만 보인다
     pttBtn.classList.toggle('show', s.can_listen && s.status !== 'navigating');
     pttBtn.classList.toggle('listening', s.status === 'listening');
@@ -150,7 +191,34 @@ async function poll() {
   } catch (e) { /* 노드 재시작 중일 수 있다. 다음 주기에 다시 시도한다 */ }
 }
 
+// ── 초기 위치 ─────────────────────────────────────────────────────────────
+const startPanel = document.getElementById('start-panel');
+const startGrid = document.getElementById('start-grid');
+let startBuilt = false;
+
+async function buildStart() {
+  if (startBuilt) return;
+  const {destinations} = await (await fetch('/api/destinations')).json();
+  startGrid.innerHTML = '';
+  for (const name of destinations) {
+    const b = document.createElement('button');
+    b.textContent = name;
+    b.onclick = async () => {
+      const res = await fetch('/api/start-here', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({waypoint: name}),
+      });
+      const r = await res.json();
+      if (!r.ok) alert(r.error);
+    };
+    startGrid.appendChild(b);
+  }
+  startBuilt = true;
+}
+
 loadDestinations();
+buildStart();
 setInterval(poll, 500);
 </script>
 </body>

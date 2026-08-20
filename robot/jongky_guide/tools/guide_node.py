@@ -32,6 +32,7 @@ import yaml
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PoseStamped
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from sensor_msgs.msg import CompressedImage, Image
 from std_msgs.msg import String
@@ -90,6 +91,9 @@ class GuideNode(Node):
         self._nav = BasicNavigator()
         self._waypoints = self._load_waypoints(waypoint_path)
         self._task: threading.Thread | None = None
+        # AMCL 이 초기 위치를 받았는가. 받기 전에는 map 프레임 목표를 변환할 수
+        # 없으므로 안내를 시작하면 안 된다 (아래 set_start 주석 참조).
+        self._localized = False
 
         # 외부(예: 음성 노드)에서도 목적지를 넣을 수 있게 열어 둔다
         self.create_subscription(String, "/guide/destination", self._on_destination_topic, 10)
@@ -136,8 +140,52 @@ class GuideNode(Node):
         p.pose.orientation.w = float(o["w"])
         return p
 
+    # ── 초기 위치 ─────────────────────────────────────────────────────────
+    #
+    # AMCL 은 초기 위치를 받기 전까지 map->odom 을 안 낸다. 그러면 _to_pose()
+    # 가 만든 frame_id="map" 목표를 변환할 수 없어서 **어떤 목적지도 안 간다.**
+    # 로그는 조용하고 goal 은 접수된 것처럼 보인다.
+    #
+    # 지금까지 유일한 방법이 개발 PC 에서 RViz 를 띄워 2D Pose Estimate 를
+    # 찍는 것이었다. 터치스크린만 있는 현장에서는 쓸 수 없다.
+    #
+    # 그래서 waypoint 를 그대로 초기 위치로 쓴다. 운영자가 로봇을 아는 지점에
+    # (예: 엘리베이터 앞) 놓고 UI 에서 그 이름을 누르면 된다.
+    def set_start(self, name: str) -> tuple[bool, str]:
+        if name not in self._waypoints:
+            return False, f"'{name}' 은 등록되지 않은 지점이다"
+        if self._task and self._task.is_alive():
+            return False, "안내 중에는 초기 위치를 바꿀 수 없다"
+        pose = self._to_pose(name)
+        self._nav.setInitialPose(pose)
+        self._localized = True
+        self._state.set(status="idle", message=f"'{name}' 에서 시작합니다")
+        self.get_logger().info(f"초기 위치를 '{name}' 로 잡았다")
+        self._speaker.say(f"{name} 에서 시작합니다")
+        return True, ""
+
+    def wait_for_nav2(self, timeout_s: float = 30.0) -> bool:
+        """Nav2 lifecycle 이 active 가 될 때까지 기다린다.
+
+        이걸 안 하면 첫 goToPose 가 아직 안 뜬 액션 서버로 가서 조용히
+        버려진다. BasicNavigator 가 내부에서 서버를 기다리긴 하지만,
+        여기서 한 번 걸어 두면 UI 가 "준비 중" 을 표시할 수 있다.
+        """
+        t0 = time.time()
+        self._state.set(status="idle", message="Nav2 를 기다리는 중입니다")
+        try:
+            self._nav.waitUntilNav2Active(localizer="amcl" if self._localized else None)
+        except Exception as exc:
+            self.get_logger().warn(f"Nav2 대기 중 예외 (계속 진행): {exc}")
+            return False
+        self.get_logger().info(f"Nav2 준비됨 ({time.time() - t0:.1f}초)")
+        return True
+
     # ── 안내 ──────────────────────────────────────────────────────────────
     def start_guiding(self, name: str) -> tuple[bool, str]:
+        if not self._localized:
+            return False, ("초기 위치를 먼저 정해야 한다. 로봇을 아는 지점에 놓고 "
+                           "'여기서 시작' 에서 그 지점을 누를 것")
         if name not in self._waypoints:
             return False, f"'{name}' 은 등록되지 않은 목적지다"
         if self._task and self._task.is_alive():
@@ -236,7 +284,11 @@ class GuideNode(Node):
         t0 = time.monotonic()
         nagged = False
         while time.monotonic() - t0 < LOST_LIMIT:
-            rclpy.spin_once(self, timeout_sec=0.2)
+            # spin 하지 않는다. main 의 MultiThreadedExecutor 가 이 노드를
+            # 이미 돌리고 있어서, 여기서 또 spin_once 를 부르면 같은 노드를
+            # 두 스레드가 돌린다 (rclpy 가 하지 말라고 명시한 것).
+            # 콜백은 executor 가 알아서 돈다 — 여기서는 자기만 하면 된다.
+            time.sleep(0.2)
             st = self._follower.poll()
             # 탐지가 죽으면 '모름' 이다. 모른다고 계속 서 있으면 안 되므로
             # 안내를 재개한다 — 탐지기 장애로 복도에 멈춰 서는 편이 더 나쁘다.
@@ -311,7 +363,8 @@ class GuideNode(Node):
                     if not self._wait_for_follower(name):
                         return
                     best, moved_at, seen_at = None, time.monotonic(), time.monotonic()
-            rclpy.spin_once(self, timeout_sec=0.1)
+            # 여기도 마찬가지다 — executor 가 콜백을 돌린다 (위 주석 참조).
+            time.sleep(0.1)
 
         result = self._nav.getResult()
         if result == TaskResult.SUCCEEDED:
@@ -425,6 +478,7 @@ def make_handler(node: GuideNode, state: GuideState):
             elif self.path == "/api/status":
                 s = state.snapshot()
                 s["can_listen"] = bool(node._listener and node._listener.ready)
+                s["localized"] = node._localized
                 self._json(s)
             else:
                 self._send(404, b"not found", "text/plain")
@@ -439,6 +493,9 @@ def make_handler(node: GuideNode, state: GuideState):
             elif self.path == "/api/cancel":
                 node.cancel()
                 self._json({"ok": True})
+            elif self.path == "/api/start-here":
+                ok, err = node.set_start(payload.get("waypoint", ""))
+                self._json({"ok": ok, "error": err}, 200 if ok else 400)
             elif self.path == "/api/listen":
                 ok, err = node.listen_and_go()
                 self._json({"ok": ok, "error": err}, 200 if ok else 400)
@@ -461,6 +518,9 @@ def main() -> None:
     # 젯슨 8GB 에 안 들어가는 큰 모델은 그렇게 쓴다. 판단이 이벤트 기반이라
     # 네트워크가 끊겨도 nav2 기본 동작으로 떨어질 뿐 주행은 계속된다.
     parser.add_argument("--llm-url", default="", help="ollama 주소 (예: http://192.168.129.97:11434/api/generate)")
+    parser.add_argument("--start-waypoint", default="",
+                        help="시작 위치로 쓸 waypoint 이름. 주면 기동 직후 AMCL 초기 위치를 "
+                             "거기로 잡는다. 안 주면 UI 의 '여기서 시작' 에서 고른다")
     parser.add_argument("--follow-url", default="",
                         help="후면 사람 탐지 서비스 (예: http://localhost:8641/follower). "
                              "주면 뒤처진 사람을 기다린다")
@@ -482,12 +542,31 @@ def main() -> None:
     threading.Thread(target=server.serve_forever, daemon=True).start()
     node.get_logger().info(f"UI: http://localhost:{args.port}")
 
+    if args.start_waypoint:
+        ok, err = node.set_start(args.start_waypoint)
+        if not ok:
+            node.get_logger().warn(f"시작 위치를 못 잡았다: {err}")
+    else:
+        node.get_logger().warn(
+            "초기 위치가 없다. UI 의 '여기서 시작' 에서 지점을 고르기 전까지 "
+            "AMCL 이 map->odom 을 못 내고, 그러면 어떤 목적지도 가지 않는다."
+        )
+
+    # 여러 스레드가 같은 노드를 돌린다 — 메인 spin, _guide_loop 워커,
+    # _wait_for_follower 워커, 그리고 BasicNavigator 의 spin_until_future_complete.
+    # 기본 SingleThreadedExecutor 를 인자 없이 쓰면 넷이 **같은 전역 executor**
+    # 를 공유해서, 워커가 goal 을 보내는 동안 카메라·/guide/destination 콜백이
+    # 간헐적으로 안 돈다. rclpy 문서도 같은 노드를 여러 스레드에서 spin 하지
+    # 말라고 한다. 명시적으로 다중 스레드 executor 를 준다.
+    executor = MultiThreadedExecutor(num_threads=4)
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
         server.shutdown()
+        executor.shutdown()
         node.destroy_node()
         rclpy.shutdown()
 

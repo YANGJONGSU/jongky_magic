@@ -39,8 +39,33 @@ def generate_launch_description():
                                           "(예: http://localhost:8641/follower)"),
         DeclareLaunchArgument("tts_voice", default_value="", description="piper onnx 경로"),
         DeclareLaunchArgument("audio_device", default_value="", description="aplay -D 값"),
+        DeclareLaunchArgument(
+            "start_waypoint", default_value="",
+            description="시작 위치로 쓸 waypoint. 안 주면 UI 의 '여기서 시작' 에서 고른다. "
+                        "이걸 안 정하면 AMCL 이 map->odom 을 못 내서 어떤 목적지도 안 간다"),
         DeclareLaunchArgument("use_rviz", default_value="false"),
+        DeclareLaunchArgument(
+            "use_camera", default_value="true",
+            description="아스트라를 띄운다. 끄면 brain 의 돌발상황 판단이 항상 건너뛰어진다 "
+                        "— 먹일 영상이 없기 때문이다"),
     ]
+
+    # 카메라. 이 런치가 이걸 안 띄우면 guide_node 의 _latest_jpeg() 가 항상
+    # None 이고, _handle_obstacle() 이 매번 판단을 건너뛴다. brain.py 와
+    # judge_obstacle() 은 배선돼 있는데 **먹일 영상이 없어서** VLM 경로 전체가
+    # dead code 였다.
+    #
+    # openni2 는 lazy 발행이라 구독자가 붙어야 스트림이 돈다. guide_node 가
+    # 구독하므로 순서는 상관없다 (bag 을 뜨는 jmap 과 다른 점).
+    camera = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory("openni2_camera"),
+                "launch", "camera_only.launch.py",
+            )
+        ),
+        condition=IfCondition(LaunchConfiguration("use_camera")),
+    )
 
     navigation = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -67,6 +92,7 @@ def generate_launch_description():
             "--llm", LaunchConfiguration("llm"),
             "--llm-url", LaunchConfiguration("llm_url"),
             "--follow-url", LaunchConfiguration("follow_url"),
+            "--start-waypoint", LaunchConfiguration("start_waypoint"),
         ],
     )
 
@@ -83,4 +109,4 @@ def generate_launch_description():
         ],
     )
 
-    return LaunchDescription(args + [navigation, guide, voice])
+    return LaunchDescription(args + [camera, navigation, guide, voice])
