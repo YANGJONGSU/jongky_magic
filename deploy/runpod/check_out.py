@@ -56,6 +56,9 @@ def main():
     p.add_argument("--log", default="/workspace/batch.log",
                    help="manifest 가 비었을 때 여기서 씨앗·조건을 복원한다")
     p.add_argument("--width", type=int, default=380)
+    p.add_argument("--frames", type=int, default=3,
+                   help="클립에서 몇 장을 뽑을지. 주문한 물체가 늦게 나타날 수 있어 "
+                        "3장으로는 '안 나왔다' 를 단정할 수 없다")
     a = p.parse_args()
 
     recs = []
@@ -98,15 +101,20 @@ def main():
         if not os.path.isfile(gen):
             print("건너뜀 (출력 없음):", r["out"][0]); continue
         s0 = frames(seed, [0.0])[0] if os.path.isfile(seed) else None
-        g0, g1, g2 = frames(gen, [0.0, 0.5, 1.0])
+        fr = [i / (a.frames - 1) for i in range(a.frames)] if a.frames > 1 else [0.0]
+        gens = frames(gen, fr)
+        # 라벨은 ASCII 만 쓴다. cv2.putText 의 Hershey 폰트에는 한글 글리프가
+        # 없어서 전부 물음표로 찍힌다.
         cells = []
         if s0 is not None:
-            cells.append(label(s0, "SEED  " + r["seed_file"].replace("corridor_", ""), a.width))
-        for im, t in ((g0, "생성 0%"), (g1, "생성 50%"), (g2, "생성 100%")):
+            cells.append(label(s0, "SEED " + r["seed_file"].replace("corridor_", "").replace(".mp4", ""),
+                               a.width))
+        cond_tag = r["cond"].replace("cond_", "").replace(".txt", "")
+        for k, im in enumerate(gens):
             if im is None:
                 continue
-            cells.append(label(im, "%s   %s" % (t, r["cond"].replace("cond_", "").replace(".txt", "")),
-                               a.width))
+            pct = int(round(100 * fr[k]))
+            cells.append(label(im, "%3d%%  %s" % (pct, cond_tag), a.width))
         h = max(c.shape[0] for c in cells)
         cells = [np.vstack([c, np.full((h - c.shape[0], c.shape[1], 3), 30, np.uint8)])
                  if c.shape[0] < h else c for c in cells]
