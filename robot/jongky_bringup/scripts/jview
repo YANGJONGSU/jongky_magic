@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# **개발 PC 에서** 돌린다. 젯슨은 SLAM 만 돌리고, 지도는 여기서 본다.
+# 젯슨은 저전력 ARM 보드라 RViz 를 얹으면 SLAM 이 같이 느려진다.
+#
+#   jview                로봇의 /map /scan /tf 를 RViz 로 본다
+#   jview --check        RViz 없이 토픽이 실제로 흐르는지만 확인한다
+#   jview 192.168.0.7    젯슨 IP 가 바뀌었을 때
+#
+# 전제: 젯슨에서 디스커버리 서버가 돌고 있어야 한다.
+# jmap / jcheck 가 알아서 띄우므로 보통은 신경 쓸 필요 없다.
+set -uo pipefail
+
+JETSON="${JONGKY_JETSON_IP:-192.168.129.134}"
+PORT="${JONGKY_DISCOVERY_PORT:-11811}"
+CHECK=0
+for a in "$@"; do
+  case "$a" in
+    --check) CHECK=1 ;;
+    -*) ;;
+    *) JETSON="$a" ;;
+  esac
+done
+
+WS_SETUP="${JONGKY_WS_SETUP:-/root/jongky_magic/install/setup.bash}"
+RVIZ_CFG="${JONGKY_RVIZ:-/root/jongky_magic/install/jongky_navigation/share/jongky_navigation/rviz/slam.rviz}"
+
+# set -u 를 켜면 안 된다 — setup.bash 가 AMENT_TRACE_SETUP_FILES 로 죽는다
+set +u
+source /opt/ros/jazzy/setup.bash
+[ -f "$WS_SETUP" ] && source "$WS_SETUP"
+set -u
+
+export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
+export ROS_DISCOVERY_SERVER="$JETSON:$PORT"
+export ROS_SUPER_CLIENT=TRUE
+
+echo "로봇: $ROS_DISCOVERY_SERVER  (도메인 $ROS_DOMAIN_ID)"
+
+# 데몬을 반드시 새로 띄운다. 예전에 디스커버리 서버 없이 뜬 데몬이 남아
+# 있으면 토픽이 하나도 안 보이는데, 원인이 네트워크처럼 보여 헤매게 된다.
+ros2 daemon stop >/dev/null 2>&1
+sleep 1
+ros2 daemon start >/dev/null 2>&1
+
+# 그래프가 도착할 때까지 기다린다. WiFi + 디스커버리 서버 조합에서는
+# 10초 넘게 걸리는 게 정상이다. ros2 CLI 기본 대기(1초)로는 항상 빈손이다.
+echo -n "그래프 수신 대기"
+FOUND=0
+for i in $(seq 1 20); do
+  if ros2 topic list 2>/dev/null | grep -qx /map; then FOUND=1; break; fi
+  echo -n "."
+  sleep 2
+done
+echo
+
+if [ "$FOUND" != "1" ]; then
+  echo "/map 이 안 보인다. 확인할 것:" >&2
+  echo "  1) 젯슨에서 SLAM 이 도는가       ssh nvidia@$JETSON 'docker exec jongky_field bash -lc \"tail -5 /tmp/slam.log\"'" >&2
+  echo "  2) 디스커버리 서버가 살아 있는가  ssh nvidia@$JETSON 'docker ps | grep jongky_discovery'" >&2
+  echo "  3) 젯슨 IP 가 맞는가             현재 $JETSON" >&2
+  exit 1
+fi
+
+echo "보이는 토픽:"
+for t in /map /scan /tf /tf_static /odom; do
+  ros2 topic list 2>/dev/null | grep -qx "$t" && echo "  $t 있음" || echo "  $t 없음  <-- 문제"
+done
+
+echo "발행률 (데이터가 실제로 흐르는지):"
+timeout 12 ros2 topic hz /map  2>&1 | grep -m1 'average rate' | sed 's/^/  \/map  /'
+timeout 8  ros2 topic hz /scan 2>&1 | grep -m1 'average rate' | sed 's/^/  \/scan /'
+
+[ "$CHECK" = "1" ] && exit 0
+
+if [ -z "${DISPLAY:-}" ]; then
+  echo "DISPLAY 가 없다 — RViz 를 못 띄운다. 데스크톱 세션에서 실행할 것" >&2
+  exit 1
+fi
+echo "RViz 를 띄운다: $RVIZ_CFG"
+exec rviz2 -d "$RVIZ_CFG"
