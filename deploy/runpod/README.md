@@ -182,3 +182,26 @@ total_video = repeat_generation * len(prompts)
 
 `run_batch.py` 와 `gen_clip.py` 는 이제 보내기 전에 공백을 접어 한 줄로 만든다.
 조건 파일을 직접 고칠 때도 **줄바꿈 없이** 쓸 것.
+
+## 배치가 끝나면 — 회수하고 파드를 끈다
+
+이 절이 없으면 배치가 끝난 뒤 A40 이 놀면서 시간당 요금만 나간다.
+
+```bash
+# 1) 기하 검사 일괄 — 흘러간 클립을 골라낸다
+cd /workspace/Cosmos1GP
+for f in outputs/*.mp4; do
+  python3 ../jongky_magic/deploy/runpod/check_drift.py "$f" > /dev/null 2>&1 \
+    || echo "기하 초과: $f"
+done
+
+# 2) 개발 PC 에서 통째로 내려받는다 (~2GB)
+rsync -az --info=progress2 <파드주소>:/workspace/Cosmos1GP/outputs/ ~/cosmos_out/
+rsync -az <파드주소>:/workspace/batch_manifest.jsonl ~/cosmos_out/
+
+# 3) 개수·크기 대조 후 파드 Stop (Terminate 아님 — 볼륨은 남는다)
+ls ~/cosmos_out/*.mp4 | wc -l     # 73 이어야 한다
+```
+
+체크포인트·venv 는 Network Volume 에 있으므로 파드를 꺼도 안 날아간다.
+다시 돌릴 일이 생기면 같은 볼륨에 파드를 새로 붙이면 된다.
