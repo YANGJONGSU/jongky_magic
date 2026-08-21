@@ -64,3 +64,36 @@ jcheck        # /scan /odom /map TF 가 다 나오는지 한 번에 본다
 ```bash
 ./fetch_models.sh --check   # 탐지 가중치가 캐시에 있나
 ```
+
+## `jbot` — 개발 PC 에서 젯슨 다루기
+
+```bash
+jbot sh                    # 셸
+jbot ros topic list        # 컨테이너 안 ROS 명령
+jbot push                  # 저장소 → 젯슨 소스
+jbot build                 # 젯슨에서 colcon build
+jbot bags                  # bag 목록
+jbot pull-bag              # 최신 bag 가져오기
+jbot pull-map 10f          # 지도를 ~/Downloads 로
+jbot batt                  # 배터리 한 번 읽기
+```
+
+`~/.ssh/config` 의 `Host jongky` 를 쓴다. **ControlMaster 로 연결을 재사용해서
+두 번째부터 0.04초**다 (매번 새로 붙으면 0.8초 — WiFi 왕복 40ms 에 핸드셰이크가
+붙는다). 10분 열어 둔다.
+
+### `jbot push` 가 안 하는 것 두 가지
+
+**`--delete` 를 안 쓴다.** 저장소에는 지도가 커밋돼 있지 않아서, 붙이면
+rsync 가 "원본에 없으니 지워라" 로 판단해 젯슨의 지도를 지운다.
+2026-08-21 에 실제로 39개를 날렸다 (백업으로 복구).
+
+**경로 끝에 슬래시를 안 붙인다.** 붙이면 패키지 **내용물**이 `src/` 최상위로
+쏟아져서 `package.xml` 과 `CMakeLists.txt` 가 거기 생기고, colcon 이 `src`
+자체를 패키지로 인식한다. 같은 날 그것도 밟았다.
+
+### 백업
+
+젯슨에 `~/jongky_ws/src.bak_0821_1300` 이 있다. **`COLCON_IGNORE` 를 넣어
+뒀다** — 안 넣으면 colcon 이 패키지 이름 중복으로 빌드를 거부한다
+(`colcon build` 는 `src/` 만이 아니라 워크스페이스 전체를 훑는다).

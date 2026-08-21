@@ -5,7 +5,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 mkdir -p "$HOME/bin"
 
-for f in jmap jdrive jsave jcheck jstop; do
+for f in jmap jdrive jsave jcheck jstop jview jbot; do
   ln -sf "$HERE/$f" "$HOME/bin/$f"
   echo "  $f"
 done

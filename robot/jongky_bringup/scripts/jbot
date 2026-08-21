@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# 개발 PC 에서 젯슨을 다루는 한 줄짜리들.
+#
+#   jbot sh [명령]     셸 (명령 없으면 대화형)
+#   jbot ros <명령>    컨테이너 안 ROS 명령  (예: jbot ros topic list)
+#   jbot push          저장소 → 젯슨 소스 동기
+#   jbot build         젯슨에서 colcon build
+#   jbot pull-bag [이름]  최신(또는 지정) bag 을 ~/bags_from_jetson 으로
+#   jbot pull-map <층>    지도를 ~/Downloads 로 (예: jbot pull-map 10f)
+#   jbot bags          bag 목록
+#   jbot batt          배터리 한 번 읽기
+#
+# 접속은 ~/.ssh/config 의 Host jongky 를 쓴다. ControlMaster 로 연결을
+# 재사용해서 두 번째부터는 0.04초다 (매번 새로 붙으면 0.8초).
+set -u
+
+H="${JONGKY_SSH_HOST:-jongky}"
+WS="${JONGKY_REMOTE_WS:-jongky_ws}"
+IMG="${JONGKY_IMAGE:-jongky:jazzy}"
+
+die(){ echo "$*" >&2; exit 1; }
+
+# 컨테이너 안에서 ROS 명령을 돌린다. --rm 이라 찌꺼기가 안 남는다.
+# host 네트워크를 써야 밖에서 띄운 노드와 같은 DDS 도메인에 든다.
+in_ros() {
+  ssh "$H" "docker run --rm --network host --ipc host \
+    -v /home/nvidia/$WS:/ws -w /ws $IMG \
+    bash -lc 'source /opt/ros/jazzy/setup.bash && source /ws/install/setup.bash 2>/dev/null; $*'"
+}
+
+case "${1:-}" in
+  sh)
+    shift
+    if [ $# -eq 0 ]; then ssh -t "$H"; else ssh "$H" "$*"; fi ;;
+
+  ros)
+    shift; [ $# -gt 0 ] || die "무엇을 돌릴지 줄 것:  jbot ros topic list"
+    in_ros "ros2 $*" ;;
+
+  push)
+    # --delete 를 **쓰지 않는다.** 저장소에 지도가 없어서, 붙이면 젯슨의
+    # 지도를 지운다. 2026-08-21 에 실제로 39개를 날렸다 (백업으로 복구).
+    # 경로 끝 슬래시도 붙이지 않는다 — 붙이면 내용물이 src/ 로 쏟아진다.
+    R="$(cd "$(dirname "$0")/../../.." && pwd)"
+    [ -d "$R/robot" ] || die "저장소 뿌리를 못 찾겠다: $R"
+    echo "→ $H:$WS/src"
+    rsync -az --exclude '__pycache__' --exclude '.git' \
+      "$R"/robot/jongky_* "$R"/fleet/guide_mission "$R"/interfaces/guide_interfaces \
+      "$H:$WS/src/" || die "rsync 실패"
+    echo "  올렸다. 반영하려면:  jbot build" ;;
+
+  build)
+    shift
+    ssh "$H" "docker run --rm -v /home/nvidia/$WS:/ws -w /ws $IMG \
+      bash -lc 'source /opt/ros/jazzy/setup.bash && colcon build --symlink-install --base-paths src ${*:-}'" ;;
+
+  bags)
+    ssh "$H" "cd $WS/../bags 2>/dev/null || cd ~/bags; ls -1t | head -20; echo; du -sh . 2>/dev/null" ;;
+
+  pull-bag)
+    N="${2:-}"
+    [ -n "$N" ] || N="$(ssh "$H" 'ls -1t ~/bags | head -1')"
+    [ -n "$N" ] || die "bag 이 없다"
+    mkdir -p ~/bags_from_jetson
+    echo "→ ~/bags_from_jetson/$N"
+    rsync -az --info=progress2 "$H:bags/$N" ~/bags_from_jetson/ || die "복사 실패"
+    ls -la ~/bags_from_jetson/"$N" ;;
+
+  pull-map)
+    F="${2:-}"; [ -n "$F" ] || die "층을 줄 것:  jbot pull-map 10f"
+    D="${JONGKY_MAP_OUT:-$HOME/Downloads}"
+    for E in pgm yaml; do
+      scp -q "$H:$WS/src/jongky_navigation/maps/fastcampus_${F}.$E" "$D/" \
+        || echo "  없다: fastcampus_${F}.$E" >&2
+    done
+    ls -la "$D"/fastcampus_"${F}".* 2>/dev/null ;;
+
+  batt)
+    in_ros "timeout 8 ros2 topic echo /battery_state --once" ;;
+
+  ""|-h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) die "모르는 명령: $1   ( jbot --help )" ;;
+esac
