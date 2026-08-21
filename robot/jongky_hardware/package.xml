@@ -13,6 +13,9 @@
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
   <depend>rcl_interfaces</depend>
+  <!-- /battery_state 발행. 전압이 토픽으로 안 나가면 bag 에 안 남고,
+       그러면 주행 이상의 원인이 전압인지 제어인지 사후에 못 가른다. -->
+  <depend>sensor_msgs</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_cmake_gtest</test_depend>

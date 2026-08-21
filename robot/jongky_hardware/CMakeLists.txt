@@ -11,6 +11,7 @@ set(THIS_PACKAGE_DEPS
   rclcpp
   rclcpp_lifecycle
   rcl_interfaces
+  sensor_msgs
 )
 
 find_package(ament_cmake REQUIRED)

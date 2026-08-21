@@ -60,6 +60,7 @@ import rclpy
 import yaml
 from geometry_msgs.msg import TwistStamped
 from nav_msgs.msg import Odometry
+from sensor_msgs.msg import BatteryState
 from std_msgs.msg import String
 from rclpy.node import Node
 from rclpy.qos import QoSProfile
@@ -90,9 +91,32 @@ MOVES = {
 # P 단독보다 PI + 데드밴드가 흔들림이 27% 적었다.
 KP, KI, DEADBAND_DEG, VZ_MAX = 0.5, 0.5, 1.0, 0.6
 
+# 적분이 혼자 쓸 수 있는 권한. VZ_MAX 의 몇 배까지 적분항을 허용할지다.
+#
+# 예전에는 제한이 VZ_MAX/KI 였다 — 즉 **적분만으로 최대 보정권한을 다 쓸 수
+# 있었다.** 포화된 뒤에는 반대 부호 오차를 계속 적분해야 풀리는데, 오차가
+# 0.1 rad 쯤이면 10초가 넘게 걸린다. 그 사이에 로봇은 반대로 넘어간다.
+#
+# 2026-08-21 새벽 촬영본에서 그게 그대로 찍혔다: 전진 중 wz 의 8.5% 가
+# |0.35| 를 넘고 188 표본이 포화(±0.6)에 붙어 있었으며, 부호가 3초에 한 번씩
+# 뒤집혔다. 자이로 기준으로 로봇이 초당 38도씩 흔들렸다. 물결 주행이다.
+I_AUTHORITY = 0.35          # 적분은 VZ_MAX 의 35% 까지만
+
+# 이 전압 아래에서는 헤딩 홀드를 스스로 놓는다.
+#
+# 전압이 처지면 모터가 명령 속도를 못 낸다. 그 상태에서 홀드가 보정을 더
+# 밀어붙이면 전류를 더 요구해 전압이 더 떨어지고, 그 사이 좌우 불균형은
+# 커진다 — 기구팀이 지적한 악순환이다. 못 낼 명령을 더 세게 미는 것은
+# 도움이 안 되므로 놓는다. 운전자가 직접 몰 수는 있다.
+#
+# 3S 리튬 기준 10.5V 가 충전 권장선이고 (jongky_system.cpp), 그보다 0.2V
+# 위에서 미리 놓는다 — 임계에 걸린 뒤에는 이미 흔들리고 있다.
+HOLD_MIN_VOLTS = 10.7
+
 
 class TeleopKey(Node):
-    def __init__(self, speed: float, turn: float, out_path: str, map_frame: str, base_frame: str):
+    def __init__(self, speed: float, turn: float, out_path: str, map_frame: str, base_frame: str,
+                 odom_topic: str = "/odometry/filtered"):
         super().__init__("jongky_teleop_key")
         self._pub = self.create_publisher(TwistStamped, "/cmd_vel", QoSProfile(depth=10))
 
@@ -116,14 +140,43 @@ class TeleopKey(Node):
         # 구슬이라 그 외란이 매번 다르다 — 같은 명령에 102cm 와 118cm 를
         # 간 실측이 있다. 고정 보정으로는 못 잡는다. 폐루프만 이긴다.
         #
-        # 기준은 odom yaw. nav2 가 쓰는 것과 같은 값이라 이게 맞으면
-        # 제어 사슬 전체가 검증된다.
+        # ⚠ 기준은 **`/odometry/filtered`** 다. `/odom` 이 아니다.
+        #
+        # `/odom` 은 diff_drive_controller 가 **바퀴 엔코더만으로** 적분한
+        # yaw 다. 바퀴가 미끄러지거나 전압이 처져 한쪽이 뒤처지면 그 yaw 는
+        # 거짓이 되는데, 그게 하필 홀드가 잡아야 할 바로 그 상황이다.
+        # 그러면 홀드가 없는 오차를 보정하고, 그 보정이 진짜 회전을 만들고,
+        # 다시 반대 부호 오차가 보고되어 좌우로 교대 진동한다 — 물결 주행이다.
+        #
+        # 2026-08-21 새벽 bag 에서 확인했다: 바퀴 각속도와 자이로의 괴리가
+        # 큰 구간일수록 보정량이 컸다 (상관 0.893). 그리고 전진 중 wz 중
+        # 수동 회전(정확히 ±turn)인 표본이 **0개** 였다 — 전부 홀드가 만든
+        # 것이었다.
+        #
+        # `/odometry/filtered` 는 EKF 가 낸다. 엔코더에서 vx, **자이로에서
+        # vyaw** 를 받으므로 바퀴가 미끄러져도 방향은 자이로가 지킨다
+        # (robot/jongky_control/config/ekf.yaml).
+        #
+        # EKF 가 안 떠 있으면(use_ekf:=false) 이 토픽이 안 오고, 그때는
+        # 홀드가 스스로 꺼진다 — 틀린 기준으로 도는 것보다 낫다.
         self._hold = True            # h 키로 끈다
         self._hold_yaw: float | None = None   # 붙잡고 있는 목표 헤딩
         self._yaw: float | None = None
+        self._yaw_t: float = 0.0     # 마지막 오도메트리 수신 시각 (신선도 판정)
         self._i_term = 0.0
         self._last_t = time.time()
-        self.create_subscription(Odometry, "/odom", self._on_odom, QoSProfile(depth=10))
+        self._odom_topic = odom_topic
+        self.create_subscription(Odometry, odom_topic, self._on_odom, QoSProfile(depth=10))
+        self._warned_stale = False
+
+        # 배터리. jongky_system.cpp 가 /battery_state 로 1 Hz 로 낸다.
+        # 안 오면 None 이고, 그때는 전압을 이유로 홀드를 끄지 않는다 —
+        # 모른다고 기능을 끄면 옛 이미지에서 홀드가 통째로 사라진다.
+        self._volts: float | None = None
+        self._volt_hold_off = False
+        self.create_subscription(
+            BatteryState, "/battery_state",
+            lambda m: setattr(self, "_volts", float(m.voltage)), QoSProfile(depth=5))
 
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
@@ -137,12 +190,41 @@ class TeleopKey(Node):
         q = m.pose.pose.orientation
         self._yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
                                1.0 - 2.0 * (q.y ** 2 + q.z ** 2))
+        self._yaw_t = time.time()
 
     def heading_correct(self, vx: float, wz: float) -> float:
         """직진 명령일 때만 헤딩을 붙잡는다. 회전 명령은 그대로 통과."""
         now = time.time()
         dt = min(0.2, now - self._last_t)
         self._last_t = now
+
+        # 오도메트리가 끊겼으면 홀드를 놓는다. 옛 yaw 로 붙잡으면 실제와
+        # 무관한 값을 쫓아간다 — EKF 가 안 떠 있을 때가 이 경우다.
+        if self._yaw is not None and now - self._yaw_t > 0.5:
+            if not self._warned_stale:
+                print(f"\r  ! {self._odom_topic} 가 0.5초 넘게 안 온다 — 헤딩 홀드를 놓는다")
+                self._warned_stale = True
+            self._yaw = None
+            self._hold_yaw = None
+            self._i_term = 0.0
+            return wz
+        self._warned_stale = False
+
+        # 전압이 낮으면 홀드를 놓는다 (위 HOLD_MIN_VOLTS 주석 참조).
+        # 0.2V 히스테리시스를 둔다 — 임계 근처에서 켜졌다 꺼졌다 하면
+        # 그것 자체가 또 다른 진동원이 된다.
+        if self._volts is not None:
+            if not self._volt_hold_off and self._volts < HOLD_MIN_VOLTS:
+                self._volt_hold_off = True
+                print(f"\r  ! 배터리 {self._volts:.1f}V — 헤딩 홀드를 놓는다. "
+                      f"직진이 휘면 손으로 잡을 것 (충전 권장)")
+            elif self._volt_hold_off and self._volts > HOLD_MIN_VOLTS + 0.2:
+                self._volt_hold_off = False
+                print(f"\r  배터리 {self._volts:.1f}V — 헤딩 홀드 복귀")
+        if self._volt_hold_off:
+            self._hold_yaw = self._yaw
+            self._i_term = 0.0
+            return wz
 
         # 운전자가 돌리려는 중이거나 멈춰 있으면 홀드를 놓고 목표를 새로 잡는다.
         if not self._hold or abs(wz) > 1e-6 or abs(vx) < 1e-6 or self._yaw is None:
@@ -163,7 +245,10 @@ class TeleopKey(Node):
         # PI + 데드밴드. 잡으려는 게 거의 일정한 편향이라 적분이 그걸 학습해
         # 일정한 보정을 걸어두면 툭툭 밀 필요가 없어진다 (실측 흔들림 27% 감소).
         self._i_term += err * dt
-        i_lim = VZ_MAX / max(KI, 1e-6)
+        # 적분은 VZ_MAX 의 I_AUTHORITY 배까지만. 예전에는 VZ_MAX/KI 라
+        # 적분 혼자 전권을 썼고, 한 번 포화되면 푸는 데 10초가 넘어
+        # 그 사이에 반대로 넘어갔다 (위 게인 블록 주석 참조).
+        i_lim = I_AUTHORITY * VZ_MAX / max(KI, 1e-6)
         self._i_term = max(-i_lim, min(i_lim, self._i_term))
 
         if abs(err) < math.radians(DEADBAND_DEG):
@@ -246,11 +331,15 @@ def main() -> None:
     parser.add_argument("--out", type=str, default="~/waypoints.yaml", help="waypoint 저장 경로")
     parser.add_argument("--map-frame", type=str, default="map")
     parser.add_argument("--base-frame", type=str, default="base_footprint")
+    parser.add_argument("--odom-topic", type=str, default="/odometry/filtered",
+                        help="헤딩 홀드 기준. 기본은 EKF 출력(자이로 융합)이다. "
+                             "/odom 은 바퀴만으로 적분한 값이라 미끄러지면 거짓이 된다")
     args, ros_args = parser.parse_known_args()
 
     rclpy.init(args=ros_args)
     node = TeleopKey(
-        min(args.speed, V_MAX), min(args.turn, OMEGA_MAX), args.out, args.map_frame, args.base_frame
+        min(args.speed, V_MAX), min(args.turn, OMEGA_MAX), args.out, args.map_frame, args.base_frame,
+        args.odom_topic,
     )
 
     settings = termios.tcgetattr(sys.stdin)

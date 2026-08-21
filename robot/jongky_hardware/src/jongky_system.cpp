@@ -1,5 +1,7 @@
 #include "jongky_hardware/jongky_system.hpp"
 
+#include <chrono>
+
 #include <cmath>
 #include <tuple>
 #include <limits>
@@ -225,6 +227,18 @@ hardware_interface::CallbackReturn JongkySystemHardware::on_configure(
       "배터리 전압이 낮다 (%.1fV). 3S 기준 10.5V 아래는 충전 권장", s.battery_v);
   }
 
+  // 배터리를 토픽으로 낸다. 1 Hz 면 충분하다 — 전압은 천천히 움직이고,
+  // 이걸 bag 에 담는 것이 목적이다. rclcpp::init 은 컨트롤러 매니저가 이미
+  // 했으므로 노드만 만들면 된다. spin 하지 않는다: 발행만 하고 구독도
+  // 서비스도 없어서 실행기가 필요 없다.
+  if (!rclcpp::ok()) {
+    RCLCPP_WARN(rclcpp::get_logger(kLogger), "rclcpp 가 아직 안 떴다 — 배터리 발행 생략");
+  } else {
+    batt_node_ = std::make_shared<rclcpp::Node>("jongky_battery");
+    batt_pub_ = batt_node_->create_publisher<sensor_msgs::msg::BatteryState>(
+      "/battery_state", rclcpp::SensorDataQoS());
+  }
+
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -321,6 +335,44 @@ hardware_interface::return_type JongkySystemHardware::read(
   comms_warned_ = false;
 
   const auto s = board_.snapshot();
+
+  // 배터리 1 Hz 발행. 값이 0 이면 보드가 아직 안 준 것이라 내보내지 않는다.
+  if (batt_pub_ && s.battery_v > 0.0) {
+    const double now_s =
+      std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (now_s - batt_last_pub_ >= 1.0) {
+      batt_last_pub_ = now_s;
+      sensor_msgs::msg::BatteryState m;
+      m.header.stamp = batt_node_->now();
+      m.voltage = static_cast<float>(s.battery_v);
+      m.current = std::numeric_limits<float>::quiet_NaN();
+      m.charge = std::numeric_limits<float>::quiet_NaN();
+      m.capacity = std::numeric_limits<float>::quiet_NaN();
+      m.design_capacity = std::numeric_limits<float>::quiet_NaN();
+      // 3S 리튬 기준 만충 12.6V, 방전 하한 9.9V 로 선형 근사한다.
+      // 정확한 SOC 곡선이 아니다 — 추세를 보기 위한 값이다.
+      m.percentage = static_cast<float>(
+        std::min(1.0, std::max(0.0, (s.battery_v - 9.9) / (12.6 - 9.9))));
+      m.power_supply_status = sensor_msgs::msg::BatteryState::POWER_SUPPLY_STATUS_DISCHARGING;
+      m.power_supply_health = s.battery_v < 10.5
+        ? sensor_msgs::msg::BatteryState::POWER_SUPPLY_HEALTH_DEAD
+        : sensor_msgs::msg::BatteryState::POWER_SUPPLY_HEALTH_GOOD;
+      m.power_supply_technology = sensor_msgs::msg::BatteryState::POWER_SUPPLY_TECHNOLOGY_LIPO;
+      m.present = true;
+      batt_pub_->publish(m);
+
+      if (s.battery_v < 10.5 && !batt_warned_) {
+        RCLCPP_WARN(
+          rclcpp::get_logger(kLogger),
+          "배터리 %.1fV — 10.5V 아래다. 이 아래에서는 모터가 명령 속도를 못 내고 "
+          "좌우 불균형이 커진다. 헤딩 홀드가 그걸 보정하려다 물결 주행이 된다.",
+          s.battery_v);
+        batt_warned_ = true;
+      } else if (s.battery_v >= 10.8) {
+        batt_warned_ = false;   // 히스테리시스 0.3V
+      }
+    }
+  }
 
   // 첫 엔코더 프레임이 원점이다. encoder_seq 는 프레임 수신 횟수라
   // 0 이면 아직 한 번도 안 왔다는 뜻이고, 그동안 encoder[] 는 의미가 없다.

@@ -26,6 +26,7 @@
 #include "jongky_hardware/yahboom_board.hpp"
 #include "rclcpp/macros.hpp"
 #include "rclcpp/node.hpp"
+#include "sensor_msgs/msg/battery_state.hpp"
 #include "rclcpp_lifecycle/state.hpp"
 
 namespace jongky_hardware
@@ -124,6 +125,19 @@ private:
   //   ros2 param set /controller_manager jongky.motor_pid_kp 0.6
   double pid_kp_{-1.0}, pid_ki_{-1.0}, pid_kd_{-1.0};
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_;
+
+  // ── 배터리 발행 ─────────────────────────────────────────────────────────
+  // 예전에는 기동할 때 로그 한 줄이 전부였다. 그래서 2026-08-21 새벽 촬영본에
+  // 전압이 한 점도 없고, 주행 이상의 원인이 전압인지 제어인지 bag 으로는
+  // 갈라낼 수가 없었다 — 시간에 따른 악화 추세로 간접 추정만 했다.
+  //
+  // 여기서 노드를 따로 만드는 이유: SystemInterface 는 자기 노드가 없고,
+  // ros2_control 에는 배터리용 broadcaster 가 없다 (imu_sensor_broadcaster 는
+  // 있다). 상태 인터페이스로만 내보내면 아무도 안 읽는다.
+  std::shared_ptr<rclcpp::Node> batt_node_;
+  rclcpp::Publisher<sensor_msgs::msg::BatteryState>::SharedPtr batt_pub_;
+  double batt_last_pub_{0.0};
+  bool batt_warned_{false};
 };
 
 }  // namespace jongky_hardware
