@@ -72,6 +72,9 @@ def main():
     ap.add_argument("--logdir", default="~/jongky_dreamer_runs/corridor_50k")
     ap.add_argument("--dreamer-repo", default="~/dreamerv3-torch")
     ap.add_argument("--episodes", default="~/labels_out/episodes")
+    ap.add_argument("--extra-episodes", default=None,
+                    help="학습 풀에만 추가할 에피소드 폴더 (예: 리스타일). "
+                         "홀드아웃은 --episodes 의 실물에서만 뽑아 비교 공정성 유지")
     ap.add_argument("--steps", type=int, default=300)
     ap.add_argument("--length", type=int, default=64)
     ap.add_argument("--batch", type=int, default=16)
@@ -116,6 +119,10 @@ def main():
     train = [f for f in files if f not in held]
     print("에피소드: 학습 %d · 홀드아웃 %d" % (len(train), len(held)))
     train_w = load_eps(train, a.length)
+    if a.extra_episodes:
+        extra = sorted(glob.glob(os.path.join(os.path.expanduser(a.extra_episodes), "*.npz")))
+        train_w += load_eps(extra, a.length)
+        print("추가 에피소드(리스타일 등): %d개" % len(extra))
     held_w = load_eps(held, a.length)
     print("창(%d프레임): 학습 %d · 홀드아웃 %d" % (a.length, len(train_w), len(held_w)))
 
