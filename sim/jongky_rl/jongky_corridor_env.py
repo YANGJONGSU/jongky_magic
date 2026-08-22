@@ -24,6 +24,8 @@ from collections.abc import Sequence
 
 import torch
 
+import reward_spec
+
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import Articulation, ArticulationCfg, RigidObject, RigidObjectCfg
@@ -54,8 +56,8 @@ JONGKY_USD = os.environ.get("JONGKY_USD", os.path.expanduser("~/jongky_usd_merge
 # ── 실차 상수 ──────────────────────────────────────────────────────────────
 WHEEL_RADIUS = 0.0335       # m
 WHEEL_SEPARATION = 0.11909  # m — 제자리 5바퀴 회전 3회 평균으로 확정한 값
-V_MAX = 0.40                # m/s
-OMEGA_MAX = 1.50            # rad/s
+V_MAX = reward_spec.V_MAX       # m/s (단일 소스: reward_spec.py)
+OMEGA_MAX = reward_spec.OMEGA_MAX  # rad/s
 A_MAX = 0.30                # m/s^2  (액션 램프 제한)
 
 
@@ -184,6 +186,12 @@ class JongkyCorridorEnvCfg(DirectRLEnvCfg):
             focal_length=18.958,
             focus_distance=400.0,
             horizontal_aperture=20.955,
+            # 실측 VFOV 45.03도 (camera_info K: fy=579.01, 480px).
+            # 안 주면 Isaac 이 정사각 픽셀로 20.955 를 세로에도 써서 VFOV 가
+            # 57.86도가 된다 (sensors_cfg.py 문서에 명시). 실물은 640x480 을
+            # 64x64 로 눌러 넣으므로 세로 45.03도/64px — 시뮬도 같은 왜곡을
+            # 겪어야 한다. 15.716 = 2 x 18.958 x tan(45.03/2).
+            vertical_aperture=15.716,
             clipping_range=(0.1, 20.0),
         ),
         width=64,
@@ -253,11 +261,13 @@ class JongkyCorridorEnvCfg(DirectRLEnvCfg):
     marker_height = 1.60        # 64x64 화면에서 멀리서도 보이도록 문 높이쯤
 
     # ── 보상 계수 ──────────────────────────────────────────────────────────
-    rew_progress = 10.0         # 목표까지 거리 감소분에 곱함 (주 신호)
-    rew_goal = 50.0             # 도달 보너스
-    rew_collision = -25.0       # 벽 충돌
-    rew_time = -0.02            # 스텝당 시간 패널티
-    rew_spin = -0.01            # 제자리 회전 억제
+    # 값의 단일 소스는 reward_spec.py 다. 실물 bag 리라벨러가 같은 값을
+    # 쓰므로 여기서 임의로 바꾸면 시뮬 보상과 실물 리플레이 보상이 갈린다.
+    rew_progress = reward_spec.REW_PROGRESS
+    rew_goal = reward_spec.REW_GOAL
+    rew_collision = reward_spec.REW_COLLISION
+    rew_time = reward_spec.REW_TIME
+    rew_spin = reward_spec.REW_SPIN
 
 
 class JongkyCorridorEnv(DirectRLEnv):
@@ -367,17 +377,29 @@ class JongkyCorridorEnv(DirectRLEnv):
         )
 
     # ── 보상 ───────────────────────────────────────────────────────────────
+    def _clearance(self) -> torch.Tensor:
+        """벽까지 이격거리 [m]. 지도 env 는 위치별 반폭으로 오버라이드한다."""
+        y = self._robot_xy()[:, 1]
+        return self.cfg.corridor_width * 0.5 - torch.abs(y) - self.cfg.robot_half_width
+
     def _get_rewards(self) -> torch.Tensor:
         dist = torch.norm(self._goal - self._robot_xy(), dim=-1)
 
-        progress = (self._prev_dist - dist) * self.cfg.rew_progress
+        # 클램프: 충돌 직후 PhysX 가 로봇을 튕겨내면 거리가 한 스텝에 수십 m
+        # 점프해 진행 항이 −수백이 된다 (reward_spec.PROGRESS_CLAMP 주석 참조)
+        progress = reward_spec.clamp_progress(
+            (self._prev_dist - dist) * self.cfg.rew_progress, torch)
         self._prev_dist = dist
 
         reached = (dist < self.cfg.goal_radius).float() * self.cfg.rew_goal
         collision = self._collided.float() * self.cfg.rew_collision
         spin = torch.abs(self._robot.data.root_ang_vel_b[:, 2]) * self.cfg.rew_spin
 
-        return progress + reached + collision + spin + self.cfg.rew_time
+        # 충돌 항은 부딪혀야 켜진다. 스치기 직전을 벌하는 연속 항이 없으면
+        # 진행 보상이 벽에 붙어 최단거리로 가는 해를 찾는다.
+        proximity = reward_spec.proximity_penalty(self._clearance(), torch)
+
+        return progress + reached + collision + spin + proximity + self.cfg.rew_time
 
     # ── 종료 ───────────────────────────────────────────────────────────────
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:

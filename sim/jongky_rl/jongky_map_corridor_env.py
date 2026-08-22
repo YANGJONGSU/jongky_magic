@@ -366,6 +366,14 @@ class JongkyMapCorridorEnv(JongkyCorridorEnv):
         idx = idx.clamp(0, len(self._sections) - 1)
         return self._sec_half[idx]
 
+    # ── 보상 ───────────────────────────────────────────────────────────────
+    def _clearance(self) -> torch.Tensor:
+        """부모는 복도 폭 스칼라 하나로 계산한다. 여기서는 로봇 x 위치의
+        실제 반폭을 쓴다 — 사물함 구간에 들어가면 근접 패널티가 자동으로
+        일찍 켜진다. _get_rewards 자체는 부모 것을 그대로 쓴다."""
+        xy = self._robot_xy()
+        return self._half_width_at(xy[:, 0]) - torch.abs(xy[:, 1]) - self.cfg.robot_half_width
+
     # ── 종료 ───────────────────────────────────────────────────────────────
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         xy = self._robot_xy()
